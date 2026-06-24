@@ -1,0 +1,50 @@
+# 截图配置模板
+# 用户需根据实际项目填写此文件,放到 knowledge/screenshot-config.yaml
+
+docker:
+  # Docker Compose 文件路径(相对于项目根目录)
+  compose_file: "docker-compose.yml"
+  # 启动后等待时间(秒),无 healthcheck 时使用
+  wait_seconds: 15
+  # 健康检查 URL(可选,如 Spring Boot Actuator)
+  # 配置后会轮询此 URL,成功后才开始截图
+  healthcheck_url: ""
+  # 是否在截图完成后自动关闭容器
+  auto_cleanup: true
+
+screenshot:
+  # 项目访问基础 URL(Docker 映射到宿主机的地址)
+  base_url: "http://localhost:8080"
+  # 浏览器视口大小
+  viewport:
+    width: 1920
+    height: 1080
+  # 截图模式: viewport(仅可视区域) / full_page(整页)
+  default_mode: "viewport"
+  # 页面加载超时(毫秒)
+  page_timeout: 15000
+  # 操作后等待时间(毫秒,等动画完成)
+  action_delay: 500
+
+# 测试账号(按角色配置)
+# webapp-testing 会用每个账号登录后截取对应角色的页面
+test_accounts:
+  admin:
+    username: "admin"
+    password: "admin123"
+    login_url: "/login"
+    # 登录成功后期望跳转到的 URL 片段(用于判断登录是否成功)
+    expected_redirect: "/dashboard"
+  
+  user:
+    username: "testuser"
+    password: "test123"
+    login_url: "/login"
+    expected_redirect: "/home"
+
+  # 如有更多角色,按同样格式添加
+  # reviewer:
+  #   username: "reviewer"
+  #   password: "review123"
+  #   login_url: "/login"
+  #   expected_redirect: "/review"

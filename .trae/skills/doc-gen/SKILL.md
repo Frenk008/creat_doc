@@ -115,7 +115,39 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 1. **前置检查**:确认 `knowledge/apis.yaml` 存在且非空
 2. 调用 `api-doc-writer` → `output/api-doc.md`
 
-### Step 4: 文档渲染 (调用 document-renderer)
+### Step 3.5: 运行时探索 (仅 --deep 模式)
+- 如果用户传了 `--deep` 参数,调用 `runtime-explorer`
+- 使用 chrome-devtools-mcp 连接已运行的项目,探索弹窗/表单/校验规则
+- 更新 `knowledge/runtime.yaml` + 回写 pages.yaml/workflows.yaml
+- 探索完成后,PKB 信息更完整,manual-writer 生成的手册质量更高
+- **如果未传 --deep**:跳过,runtime.yaml 标记为 `not_explored`
+
+### Step 4: 截图采集 (调用 webapp-testing + screenshot-reviewer)
+**仅对 --type manual 或 all 执行,需要 Docker 环境。**
+
+#### 4.1 Docker 启动
+- 读取 `knowledge/screenshot-config.yaml`
+- 执行 `docker compose up -d` 启动项目
+- 等待 healthcheck 或轮询 base_url 确认就绪
+
+#### 4.2 批量截图
+- 调用 `webapp-testing`,使用 Playwright 按 `screenshots.yaml` 批量截图
+- 产出: `output/screenshots/*.png` + `output/capture-result.json`
+
+#### 4.3 截图审核
+- 调用 `screenshot-reviewer` 检查截图质量
+- 不合格截图生成补拍清单,最多补拍 2 轮
+- 最终更新 `screenshots.yaml` 中每张图的 status
+
+#### 4.4 Docker 清理
+- `docker compose down` 关闭容器(除非用户要求保留)
+
+**截图采集失败处理:**
+- Docker 不可用 → 跳过截图,手册保留占位标记
+- Playwright 未安装 → 提示安装后重试,手册保留占位标记
+- 部分截图失败 → 成功的图嵌入文档,失败的保留占位
+
+### Step 5: 文档渲染 (调用 document-renderer)
 将所有生成的 Markdown 渲染为 DOCX:
 
 | 输入 | 输出 |
@@ -124,12 +156,36 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 | output/database-spec.md | output/数据库设计说明书.docx |
 | output/api-doc.md | output/API接口文档.docx |
 
-## V1 版本简化规则
+渲染时:
+- 如果 `output/screenshots/` 存在已审核的截图,将手册中的占位标记替换为实际图片引用
+- 如果截图不存在或未审核,保留占位标记
 
-以下组件在 V1 中为占位状态,不实际执行:
-- `runtime-explorer`: 不运行项目
-- `webapp-testing`: 不启动浏览器,仅保留截图计划
-- `screenshot-reviewer`: 不检查实际截图
+## V2 版本增强(对比 V1)
+
+V2 相比 V1,以下组件从占位状态升级为实际执行:
+
+| 组件 | V1 状态 | V2 状态 | 触发条件 |
+|------|---------|---------|---------|
+| runtime-explorer | ⬜ 占位 | ✅ chrome-devtools-mcp 探索 | `--deep` 参数 |
+| webapp-testing | ⬜ 占位 | ✅ Docker + Playwright 截图 | 自动(manual/all 模式) |
+| screenshot-reviewer | ⬜ 占位 | ✅ 程序化 + MCP 审核 | 截图完成后 |
+
+**V2 新增依赖:**
+- Docker + Docker Compose(启动项目)
+- Playwright(`pip install playwright && playwright install chromium`)
+- chrome-devtools-mcp(本环境已内置)
+
+**V2 完整执行链路:**
+```
+Step 1:   project-explorer  → PKB
+Step 2:   (runtime-explorer → --deep 模式才执行)
+Step 2.5: diagram-generator → UML 图表
+Step 3:   writers           → Markdown
+Step 3.5: (runtime-explorer → --deep 模式)
+Step 4:   webapp-testing    → Docker 启动 + Playwright 截图
+Step 4.3: screenshot-reviewer → 截图审核 + 补拍
+Step 5:   document-renderer → DOCX(嵌入实际截图)
+```
 
 ## 输出物清单
 
@@ -137,8 +193,9 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 1. `knowledge/*.yaml` —— 完整的 PKB
 2. `output/diagrams/*.png` —— 流程图 + 功能总览图
 3. `output/manual.md` —— 审核后的 Markdown 手册(含图表引用)
-4. `output/用户使用手册.docx` —— 最终 DOCX
-5. `knowledge/screenshots.yaml` —— 截图计划
+4. `output/screenshots/*.png` —— 实际界面截图(V2)
+5. `output/用户使用手册.docx` —— 最终 DOCX(含 UML 图 + 界面截图)
+6. `knowledge/screenshots.yaml` —— 截图计划(含采集状态)
 
 ### --type database
 1. `knowledge/database.yaml` —— 数据库 PKB

@@ -1,91 +1,315 @@
 ---
 name: "runtime-explorer"
-description: "运行时探索器(V2 功能,V1 为占位状态)。通过启动项目并使用浏览器自动化,发现静态分析无法获取的动态行为(弹窗内容、表单校验、动态加载等)并更新 PKB。当前 V1 版本仅记录占位,不实际执行。当 doc-gen 以 --deep 模式调用时触发。"
+description: "运行时探索器(V2)。通过chrome-devtools-mcp连接已启动的项目,自动探索页面的动态行为(弹窗内容、表单校验、动态加载等)并更新PKB。当doc-gen以--deep模式调用时使用。"
 ---
 
-# Runtime Explorer —— 运行时探索器
+# Runtime Explorer —— 运行时探索器(V2)
 
-> **版本状态: V1 为占位模式,不实际执行。此文档为 V2 完整实现的设计规范。**
+你的任务是通过 chrome-devtools-mcp 连接到已运行的目标项目,自动探索页面的动态行为,补充静态分析无法发现的信息,并更新 PKB。
 
-## V1 行为(当前)
+## 前置条件
 
-当被调用时:
-1. 不启动项目,不执行浏览器操作
-2. 在 `knowledge/runtime.yaml` 中写入:
+1. 目标项目已通过 Docker 启动(webapp-testing Step 2 已执行,或用户手动启动)
+2. 项目可通过浏览器访问(有 base_url)
+3. chrome-devtools-mcp 已集成(本环境已内置)
+
+## 输入
+
+- `knowledge/screenshot-config.yaml` —— 含 base_url 和 test_accounts
+- `knowledge/pages.yaml` —— 静态分析得到的页面列表
+- `knowledge/modules.yaml` —— 模块信息
+
+## 输出
+
+- `knowledge/runtime.yaml` —— 运行时发现(弹窗、表单、校验规则等)
+- 更新 `knowledge/pages.yaml` —— 补充动态发现的 actions 和 fields
+- 更新 `knowledge/workflows.yaml` —— 补充动态发现的操作步骤
+
+## 为什么用 chrome-devtools-mcp 而不是 Playwright
+
+runtime-explorer 的核心是**探索**,不是按计划执行:
+- 打开页面后,需要 **AI 实时判断**"这个弹窗 PKB 里有没有记录过"
+- 看到一个表单,需要 **AI 决定**"要不要试着提交空表单看校验提示"
+- 发现新的 UI 元素,需要 **AI 决定**"要不要点击看看会弹出什么"
+
+这种"走走停停、实时判断"的工作模式,天然适合 MCP 工具逐步调用,而不适合预先编写脚本。
+
+## 探索策略
+
+### 核心原则
+
+```
+不追求全覆盖,只补高价值发现。
+每发现一个静态分析遗漏的信息,就更新 PKB。
+```
+
+### 探索深度控制
+
+为避免无限探索,设置明确的边界:
+
+| 探索内容 | 深度 | 说明 |
+|---------|------|------|
+| 页面级 | 所有 pages.yaml 中的页面 | 每页都打开看一眼 |
+| 弹窗级 | 点击主操作按钮(新增/编辑) | 只探索主要弹窗,不探索每个下拉 |
+| 表单级 | 弹窗中的所有输入框 | 记录字段和校验规则 |
+| 交互级 | 不深入(不执行实际增删改) | 只看不动数据 |
+
+## 执行流程
+
+### Step 1: 读取 PKB 和配置
+
+读取 `pages.yaml` 获取页面列表,读取 `screenshot-config.yaml` 获取 base_url 和测试账号。
+
+### Step 2: 登录系统
+
+使用 chrome-devtools-mcp 工具登录:
+
+```
+1. navigate_page → 打开 {base_url}/login
+2. take_snapshot → 获取登录页结构
+3. fill → 填写用户名(username 选择器)
+4. fill → 填写密码(password 选择器)
+5. click → 点击登录按钮
+6. wait_for → 等待页面跳转
+```
+
+**MCP 工具调用示例:**
+
+```
+navigate_page(url="{base_url}/login")
+take_snapshot()  → 分析登录表单结构
+fill(selector="input[name='username']", value="admin")
+fill(selector="input[name='password']", value="admin123")
+click(selector="button[type='submit']")
+wait_for(text="首页", timeout=10000)  # 等待首页加载
+```
+
+### Step 3: 逐页探索
+
+对 `pages.yaml` 中的每个页面:
+
+#### 3.1 打开页面
+
+```
+navigate_page(url="{base_url}{page.route}")
+take_snapshot()  → 获取页面 DOM 结构
+```
+
+#### 3.2 对比静态分析结果
+
+分析 snapshot,与 PKB 中的 `pages.actions` 和 `pages.fields` 对比:
+
+**发现新内容时更新 PKB:**
+
+```yaml
+# 静态分析知道页面有"新增"按钮,但不知道点击后弹出什么
+# 运行时发现:
+page_id: "user-list"
+discovered_actions:
+  - action: "create"
+    trigger: "点击新增按钮"
+    result: "弹出对话框"
+    dialog_title: "新增用户"
+    discovered_fields:       # ← 静态分析不知道的表单字段
+      - name: "username"
+        label: "用户名"
+        type: "input"
+        required: true
+      - name: "email"
+        label: "邮箱"
+        type: "input"
+        required: true
+      - name: "role"
+        label: "角色"
+        type: "select"
+        options: ["管理员", "普通用户"]  # ← 下拉选项
+```
+
+#### 3.3 点击主要操作按钮
+
+对页面上的主要操作按钮(新增、编辑),点击并记录弹出的内容:
+
+```
+click(selector="button:has-text('新增')")
+take_snapshot()  → 获取弹窗 DOM
+```
+
+**记录弹窗信息:**
+
+```yaml
+discovered_dialogs:
+  - trigger_page: "user-list"
+    trigger_action: "click_create_button"
+    dialog_type: "modal"        # modal / drawer / page
+    dialog_title: "新增用户"
+    fields:
+      - name: "username"
+        label: "用户名"
+        type: "input"
+        required: true
+        placeholder: "请输入用户名"
+      - name: "role"
+        label: "角色"
+        type: "select"
+        options: ["管理员", "普通用户", "审核员"]
+    submit_button_text: "确定"
+    cancel_button_text: "取消"
+```
+
+#### 3.4 探索表单校验
+
+对弹窗中的表单,提交空表单看校验提示:
+
+```
+click(selector="button:has-text('确定')")  # 不填任何内容直接提交
+take_snapshot()  → 获取校验错误信息
+```
+
+**记录校验规则:**
+
+```yaml
+discovered_validation_rules:
+  - page: "user-create"
+    field: "username"
+    rules:
+      - type: "required"
+        message: "请输入用户名"
+      - type: "length"
+        message: "长度在 3 到 20 个字符"
+    # 如果能触发更多校验则记录
+```
+
+#### 3.5 探索动态加载
+
+检查页面是否有动态加载的内容(异步下拉、级联选择等):
+
+```
+# 通过 snapshot 检查是否有 loading 状态、异步组件
+# 如果发现动态加载行为,记录触发条件
+```
+
+### Step 4: 关闭弹窗,恢复页面
+
+探索完一个弹窗后:
+
+```
+click(selector="button:has-text('取消')")  # 或 press_key(key="Escape")
+```
+
+确保页面恢复到初始状态,再继续探索下一个。
+
+### Step 5: 生成 runtime.yaml
+
+将所有发现写入 `knowledge/runtime.yaml`:
 
 ```yaml
 runtime:
-  status: "not_explored"
-  note: "V1 版本跳过运行时探索。动态行为(弹窗内容、表单校验规则等)需人工补充或升级到 V2。"
-  discovered_dialogs: []
-  dynamic_fields: []
-  validation_rules: []
-```
+  status: "complete"            # complete / partial / failed
+  explored_at: "{时间}"
+  explored_pages: ["login", "user-list", "user-create", "role-list"]
+  total_pages: 15               # pages.yaml 中的页面总数
+  explored_count: 4             # 实际探索的页面数
 
-3. 返回提示:"运行时探索在 V1 中为占位状态,PKB 仅包含静态分析结果。"
-
----
-
-## V2 完整设计(未来实现)
-
-### 职责
-
-补充静态分析无法发现的动态行为:
-- 点击按钮后弹出的对话框/表单
-- 表单字段的动态校验规则
-- 异步加载的下拉选项
-- 操作成功/失败后的提示信息
-- 条件显示的 UI 元素
-
-### 执行流程
-
-```
-1. 启动目标项目(或连接到已运行实例)
-2. 使用 Playwright/Puppeteer 打开浏览器
-3. 按 pages.yaml 逐页访问
-4. 对每个页面执行交互探索:
-   a. 点击所有可点击元素
-   b. 记录弹出的对话框及其表单字段
-   c. 提交空表单记录校验提示
-   d. 记录操作后的反馈信息
-5. 将发现写入 knowledge/runtime.yaml
-6. 更新 PKB 中相关 pages/workflows
-```
-
-### 产出
-
-`knowledge/runtime.yaml`:
-
-```yaml
-runtime:
-  status: "complete"
-  explored_pages: ["login", "user-list", "user-create"]
-  dialogs:
+  discovered_dialogs:
     - trigger_page: "user-list"
-      trigger_action: "click_create"
+      trigger_action: "click_create_button"
       dialog_title: "新增用户"
-      fields:
-        - name: "username"
-          label: "用户名"
-          type: "input"
-          required: true
-          validation: "必填项,3-20个字符"
-        - name: "email"
-          label: "邮箱"
-          type: "input"
-          required: true
-          validation: "必填项,需符合邮箱格式"
+      dialog_type: "modal"
+      fields: [...]
       submit_button: "确定"
       cancel_button: "取消"
-  validation_rules:
+
+    - trigger_page: "user-list"
+      trigger_action: "click_edit_button"
+      dialog_title: "编辑用户"
+      dialog_type: "modal"
+      fields: [...]
+
+  discovered_validation_rules:
     - page: "user-create"
       field: "username"
       rules:
-        - "必填"
-        - "长度3-20"
-        - "不能包含特殊字符"
-  feedback_messages:
+        - type: "required"
+          message: "请输入用户名"
+        - type: "length"
+          message: "长度在 3 到 20 个字符"
+
+    - page: "user-create"
+      field: "email"
+      rules:
+        - type: "required"
+          message: "请输入邮箱"
+        - type: "email"
+          message: "请输入正确的邮箱格式"
+
+  discovered_dynamic_elements:
+    - page: "order-create"
+      element: "产品下拉框"
+      trigger: "选择产品分类后动态加载"
+      dependency: "category_id"
+
+  discovered_feedback_messages:
     - trigger: "create_user_success"
-      message: "用户创建成功"
+      message: "新增成功"
       type: "success"
+    - trigger: "create_user_duplicate"
+      message: "用户名已存在"
+      type: "error"
 ```
+
+### Step 6: 更新 PKB
+
+将运行时发现回写到 PKB 文件:
+
+**更新 pages.yaml:**
+- 将 `discovered_fields` 合并到 page.fields
+- 将弹窗中的操作补充到 page.actions
+
+**更新 workflows.yaml:**
+- 将弹窗中的表单字段补充到 workflow steps
+- 将校验规则补充到 steps 的 notes
+
+## 探索优化(避免 token 爆炸)
+
+### 分页探索
+
+如果 pages.yaml 有很多页面(>10 个),分批探索:
+
+```
+第1批: 登录页 + 首页 + 前3个核心模块页面
+第2批: 其余页面
+```
+
+### 跳过低价值页面
+
+以下页面可以跳过运行时探索:
+- 纯展示页面(无操作按钮)
+- 静态分析已经覆盖了所有 fields 的页面
+- 外部链接页面(跳转到其他系统)
+
+### 控制弹窗探索深度
+
+对每个页面:
+- 只探索 1-2 个主要操作(新增/编辑)
+- 不探索次要操作(导出、批量删除、排序)
+- 不进入多级弹窗(弹窗中再弹窗)
+
+## 错误处理
+
+| 错误场景 | 处理 |
+|---------|------|
+| 页面导航超时 | 跳过该页,记录 status: "timeout" |
+| 登录失败 | 尝试备用账号,仍失败则标记 status: "auth_failed" |
+| 弹窗未弹出 | 记录但不算错误(可能是权限不足) |
+| MCP 工具调用失败 | 重试一次,仍失败则跳过 |
+
+## 文件编码规范
+
+所有 YAML 输出使用 UTF-8 无 BOM 编码。
+
+## 严格约束
+
+1. **不修改数据**:不执行实际的增删改操作,只点击"新增/编辑"看弹窗,然后取消关闭。
+2. **不提交表单**:提交空表单仅为触发校验提示,不填写真实数据后提交。
+3. **每次探索后恢复**:弹窗探索完毕后必须关闭弹窗,不残留弹窗状态。
+4. **发现即记录**:任何静态分析没有的信息都要记录到 runtime.yaml。
