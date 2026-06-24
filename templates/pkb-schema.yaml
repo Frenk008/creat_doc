@@ -1,0 +1,188 @@
+# ============================================================
+# Project Knowledge Base (PKB) Schema
+# 技术栈无关的统一知识模型 —— 所有 Skill 的唯一事实来源 (SSOT)
+# ============================================================
+
+# ---- project.yaml: 项目基本信息 ----
+project:
+  name: ""                    # 项目名称
+  version: ""                 # 版本号(如可识别)
+  description: ""             # 项目简介
+  tech_stack:
+    backend: ""               # java / go / node / python / ...
+    backend_framework: ""     # spring-boot / gin / echo / ...
+    frontend: ""              # vue / react / angular / html / ...
+    frontend_router: ""       # vue-router / react-router / ...
+    ui_lib: ""                # element-plus / ant-design / ...
+    build_tool: ""            # maven / gradle / go-mod / vite / webpack / ...
+    database: ""              # mysql / postgresql / mongodb / ...
+  target_users: []            # 目标用户群体(从代码/配置推断)
+
+# ---- modules.yaml: 功能模块 ----
+modules:
+  - id: ""                    # 唯一标识(英文,如 user-management)
+    name: ""                  # 中文名(如"用户管理")
+    description: ""           # 模块简介(面向用户语言)
+    pages: []                 # 关联页面 ID 列表
+    workflows: []             # 关联业务流程 ID 列表
+    roles: []                 # 可访问的角色 ID 列表
+
+# ---- pages.yaml: 页面/界面 ----
+pages:
+  - id: ""                    # 唯一标识(如 user-list)
+    route: ""                 # 路由路径(如 /users)
+    title: ""                 # 页面标题(中文)
+    menu_path: ""             # 菜单层级(如"系统管理 > 用户管理")
+    module_id: ""             # 所属模块 ID
+    roles: []                 # 可访问角色
+    actions: []               # 页面操作列表(如 create, edit, delete, export, search)
+    fields: []                # 关键业务字段(如 username, email, role)
+    description: ""           # 页面功能描述(面向用户语言)
+
+# ---- roles.yaml: 用户角色 ----
+roles:
+  - id: ""                    # 唯一标识(如 admin)
+    name: ""                  # 中文名(如"管理员")
+    description: ""           # 角色说明
+    permissions:              # 权限范围
+      can_access: []          # 可访问模块/页面
+      cannot_access: []       # 不可访问模块/页面
+    typical_scenarios: []     # 典型使用场景
+
+# ---- workflows.yaml: 业务流程 ----
+workflows:
+  - id: ""                    # 唯一标识(如 create-user)
+    name: ""                  # 中文名(如"创建用户")
+    module_id: ""             # 所属模块
+    roles: []                 # 可执行角色
+    steps:                    # 操作步骤
+      - order: 1
+        page_id: ""           # 在哪个页面
+        action: ""            # 做什么操作(如"点击'新增'按钮")
+        result: ""            # 操作结果(如"弹出创建对话框")
+        notes: ""             # 注意事项
+    preconditions: []         # 使用前提条件
+    postconditions: []        # 完成后的结果
+
+# ---- workflows.yaml 补充: 业务流程链 ----
+# 例如: 登录 → 创建 → 查询 → 编辑 → 保存 → 导出 → 退出
+workflow_chains:
+  - id: ""
+    name: ""
+    description: ""
+    workflow_ids: []          # 按顺序引用 workflow ID
+
+# ---- database.yaml: 数据模型(支持数据库说明书) ----
+database:
+  engine: ""                    # mysql / postgresql / mongodb / ...
+  version: ""                   # 数据库版本
+  charset: ""                   # 字符集(如 utf8mb4)
+  tables:
+    - name: ""                  # 表名(如 sys_user)
+      business_name: ""         # 中文名(如 用户表)
+      description: ""           # 表用途说明
+      module_id: ""             # 所属业务模块
+      engine: ""                # InnoDB / MyISAM(留空则用默认)
+      charset: ""               # 表字符集
+      fields:
+        - name: ""              # 字段名
+          business_name: ""     # 中文名
+          type: ""              # 数据类型(如 VARCHAR(50))
+          nullable: false       # 是否允许为空
+          default: ""           # 默认值
+          primary_key: false    # 是否主键
+          auto_increment: false # 是否自增
+          unique: false         # 是否唯一约束
+          index: false          # 是否普通索引
+          index_name: ""        # 索引名(如有)
+          foreign_key: ""       # 外键引用(如 sys_role.id)
+          enum_values: []       # 枚举值(如启用状态 [0,1] 对应 [禁用,启用])
+          description: ""       # 字段说明
+      indexes:                  # 表索引
+        - name: ""              # 索引名
+          fields: []            # 索引字段
+          type: ""              # unique / normal / fulltext
+          description: ""
+      relations:                # 表间关系
+        - target_table: ""      # 关联目标表
+          type: ""              # 1:1 / 1:N / N:M
+          via_field: ""         # 通过哪个字段关联
+          description: ""
+  er_relations:                 # 全局 ER 关系汇总(用于绘制ER图)
+    - from_table: ""
+      to_table: ""
+      type: ""                  # 1:1 / 1:N / N:M
+      description: ""
+
+# ---- apis.yaml: 接口定义(支持API文档) ----
+apis:
+  base_url: ""                  # API 基础路径(如 /api/v1)
+  auth_type: ""                 # 认证方式(bearer / basic / apikey / none)
+  groups:                       # 接口分组(按模块)
+    - id: ""                    # 分组ID(对应 module_id)
+      name: ""                  # 中文名(如"用户管理")
+      description: ""
+  endpoints:
+    - id: ""                    # 唯一标识
+      group_id: ""              # 所属分组
+      method: ""                # GET / POST / PUT / DELETE / PATCH
+      path: ""                  # 完整路径(如 /api/v1/users)
+      summary: ""               # 接口摘要(中文)
+      description: ""           # 详细说明
+      tags: []                  # 标签
+      deprecated: false         # 是否废弃
+      auth_required: true       # 是否需要认证
+      roles: []                 # 允许访问的角色
+      request:
+        headers:                # 请求头
+          - name: ""
+            type: ""
+            required: true
+            description: ""
+        params:                 # 路径/查询参数
+          - name: ""
+            in: ""              # path / query
+            type: ""
+            required: true
+            description: ""
+            example: ""
+        body:                   # 请求体
+          content_type: ""      # application/json / multipart/form-data
+          fields:
+            - name: ""
+              type: ""
+              required: true
+              description: ""
+              example: ""
+              enum_values: []   # 枚举可选值
+      response:
+        success:
+          code: 200
+          description: ""
+          body:                 # 响应体字段
+            - name: ""
+              type: ""
+              description: ""
+              example: ""
+        errors:                 # 错误响应
+          - code: 400
+            description: ""
+            message: ""
+
+# ---- screenshots.yaml: 截图计划(由 screenshot-planner 生成) ----
+screenshots:
+  - id: ""                    # 如 shot-5-2
+    manual_ref: ""            # 对应手册位置(如"5.2 创建用户-步骤3")
+    page_id: ""               # 需要截图的页面
+    action: ""                # 截图前的操作
+    need_scroll: false        # 是否需要滚动
+    highlight: ""             # 需要高亮的元素
+    data_state: ""            # 需要的数据状态(如"列表已有3条记录")
+    status: "planned"         # planned / captured / reviewed / failed
+
+# ---- runtime.yaml: 运行时探索发现(V1 留空,V2 补充) ----
+runtime:
+  dialogs: []                 # 运行时发现的对话框/弹窗
+  dynamic_fields: []          # 动态表单字段
+  validation_rules: []        # 表单校验规则
+  status: "not_explored"      # not_explored / partial / complete
