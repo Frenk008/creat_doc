@@ -22,13 +22,20 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 用户调用 doc-gen --type <文档类型>
        │
        ▼
-┌─ 阶段1: 静态分析(只跑一次) ──────────────────┐
+┌─ 阶段1: 静态分析(只跑一次)(=Step 1) ──────────┐
 │  project-explorer  (扫描源码 → 完整 PKB)      │
-│  runtime-explorer  (运行时探索, V1可选)        │
 └──────────────────────────────────────────────┘
        │
        ▼ (PKB = knowledge/ 目录下所有 YAML)
-┌─ 阶段2: 图表生成(按类型生成UML图) ─────────────┐
+┌─ 阶段1.5: 运行时探索(仅 --deep, manual/all)(=Step 2) ┐
+│  (用户需已自行启动项目)                        │
+│  runtime-explorer(chrome-devtools-mcp 探索)   │
+│  → 回写补全 PKB,再进入 writers                │
+│  (未传 --deep 则整阶段跳过)                    │
+└──────────────────────────────────────────────┘
+       │
+       ▼
+┌─ 阶段2: 图表生成(按类型生成UML图)(=Step 2.5) ─────┐
 │  diagram-generator                             │
 │  --type database → ER图                         │
 │  --type api → 时序图                            │
@@ -38,7 +45,7 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 └──────────────────────────────────────────────┘
        │
        ▼
-┌─ 阶段3: 文档生成(按类型调度) ─────────────────┐
+┌─ 阶段3: 文档生成(按类型调度)(=Step 3) ──────────┐
 │  --type manual:                              │
 │    manual-writer + screenshot-planner        │
 │  --type database:                            │
@@ -51,17 +58,17 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 └──────────────────────────────────────────────┘
        │
        ▼
-┌─ 阶段4: 质量审核 ──────────────────────────┐
+┌─ 阶段4: 质量审核(=Step 3,QA 在 Step 3 内) ─────────┐
 │  qa-reviewer (用户手册) / 直接通过(技术文档)   │
 └───────────────────────────────────────────┘
        │
        ▼
-┌─ 阶段5: 截图采集 (仅 manual, V1跳过) ──────────┐
+┌─ 阶段5: 截图采集 (仅 manual, V1跳过)(=Step 4) ──────┐
 │  webapp-testing + screenshot-reviewer         │
 └──────────────────────────────────────────────┘
        │
        ▼
-┌─ 阶段6: 文档渲染 ──────────────────────────┐
+┌─ 阶段6: 文档渲染(=Step 5) ──────────────────────┐
 │  document-renderer (Markdown → DOCX/PDF)      │
 │  (嵌入 diagrams/*.png)                        │
 └───────────────────────────────────────────┘
@@ -86,9 +93,14 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 - 产出: `knowledge/` 下的 YAML 文件
 - **检查点**:根据文档类型校验必需的 PKB 文件存在
 
-### Step 2: 运行时探索 (V1 可选,默认跳过)
-- 如果用户明确要求 "深度分析",调用 `runtime-explorer`
-- V1 默认跳过
+### Step 2: 运行时探索 (仅 --deep 模式,manual/all)
+- **默认跳过。** 仅当用户传 `--deep` 且文档类型为 manual/all 时执行。
+- **前置要求**:用户需先自行启动项目,并在 `knowledge/screenshot-config.yaml` 中填写 base_url 和测试账号。
+- 此阶段必须在 writers 之前完成,以便用更完整的 PKB 生成文档:
+  1. 检测 base_url 连通性(用户应已自行启动项目)
+  2. 连通后调用 `runtime-explorer`,用 chrome-devtools-mcp 探索弹窗/表单/校验规则
+  3. runtime-explorer 将发现回写 `knowledge/runtime.yaml`,并补全 pages.yaml/workflows.yaml
+- **降级路径**:base_url 不可达 → 提示用户先启动项目,跳过 deep 阶段,`runtime.yaml` 标记 `status: not_explored`,继续后续流程(不阻塞)。
 
 ### Step 2.5: 图表生成 (调用 diagram-generator)
 - 在文档生成之前,先根据文档类型生成对应的 UML 图表
@@ -104,8 +116,8 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 
 #### 如果 --type manual 或 all:
 1. 调用 `manual-writer` → `output/manual.md`(读取 manifest.yaml 在对应位置嵌入流程图和总览图)
-2. 调用 `screenshot-planner` → `knowledge/screenshots.yaml`
-3. 调用 `qa-reviewer` 审核 `output/manual.md`
+2. 调用 `qa-reviewer` 审核 `output/manual.md`(可能新增图片占位)
+3. 调用 `screenshot-planner` → `knowledge/screenshots.yaml`(读取 qa-reviewer 审核后的 manual.md)
 
 #### 如果 --type database 或 all:
 1. **前置检查**:确认 `knowledge/database.yaml` 存在且非空
@@ -115,20 +127,13 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 1. **前置检查**:确认 `knowledge/apis.yaml` 存在且非空
 2. 调用 `api-doc-writer` → `output/api-doc.md`
 
-### Step 3.5: 运行时探索 (仅 --deep 模式)
-- 如果用户传了 `--deep` 参数,调用 `runtime-explorer`
-- 使用 chrome-devtools-mcp 连接已运行的项目,探索弹窗/表单/校验规则
-- 更新 `knowledge/runtime.yaml` + 回写 pages.yaml/workflows.yaml
-- 探索完成后,PKB 信息更完整,manual-writer 生成的手册质量更高
-- **如果未传 --deep**:跳过,runtime.yaml 标记为 `not_explored`
-
 ### Step 4: 截图采集 (调用 webapp-testing + screenshot-reviewer)
-**仅对 --type manual 或 all 执行,需要 Docker 环境。**
+**仅对 --type manual 或 all 执行。需用户先自行启动项目。**
 
-#### 4.1 Docker 启动
+#### 4.1 连接检测
 - 读取 `knowledge/screenshot-config.yaml`
-- 执行 `docker compose up -d` 启动项目
-- 等待 healthcheck 或轮询 base_url 确认就绪
+- 检测 base_url 是否可达
+- 如不可达,提示用户:"请先启动项目并确认浏览器能访问 {base_url}",等待用户确认后重试
 
 #### 4.2 批量截图
 - 调用 `webapp-testing`,使用 Playwright 按 `screenshots.yaml` 批量截图
@@ -139,11 +144,11 @@ description: "自动化软件文档生成编排器。协调多个子 Skill 完�
 - 不合格截图生成补拍清单,最多补拍 2 轮
 - 最终更新 `screenshots.yaml` 中每张图的 status
 
-#### 4.4 Docker 清理
-- `docker compose down` 关闭容器(除非用户要求保留)
+#### 4.4 完成
+- 关闭 Playwright 浏览器,不关闭用户的项目
 
 **截图采集失败处理:**
-- Docker 不可用 → 跳过截图,手册保留占位标记
+- base_url 不可达 → 提示用户启动项目,手册保留占位标记
 - Playwright 未安装 → 提示安装后重试,手册保留占位标记
 - 部分截图失败 → 成功的图嵌入文档,失败的保留占位
 
@@ -167,22 +172,21 @@ V2 相比 V1,以下组件从占位状态升级为实际执行:
 | 组件 | V1 状态 | V2 状态 | 触发条件 |
 |------|---------|---------|---------|
 | runtime-explorer | ⬜ 占位 | ✅ chrome-devtools-mcp 探索 | `--deep` 参数 |
-| webapp-testing | ⬜ 占位 | ✅ Docker + Playwright 截图 | 自动(manual/all 模式) |
+| webapp-testing | ⬜ 占位 | ✅ Playwright 截图(连接用户已启动的项目) | 自动(manual/all 模式) |
 | screenshot-reviewer | ⬜ 占位 | ✅ 程序化 + MCP 审核 | 截图完成后 |
 
 **V2 新增依赖:**
-- Docker + Docker Compose(启动项目)
 - Playwright(`pip install playwright && playwright install chromium`)
 - chrome-devtools-mcp(本环境已内置)
+- **用户需自行启动目标项目**(不依赖 Docker 自动启动)
 
-**V2 完整执行链路:**
+**完整执行链路:**
 ```
 Step 1:   project-explorer  → PKB
-Step 2:   (runtime-explorer → --deep 模式才执行)
+Step 2:   (--deep) 用户确保项目已运行 + runtime-explorer 探索 → 回写 PKB
 Step 2.5: diagram-generator → UML 图表
-Step 3:   writers           → Markdown
-Step 3.5: (runtime-explorer → --deep 模式)
-Step 4:   webapp-testing    → Docker 启动 + Playwright 截图
+Step 3:   writers(manual-writer → qa-reviewer → screenshot-planner) → Markdown + screenshots.yaml
+Step 4:   webapp-testing    → 连接用户项目 → Playwright 截图
 Step 4.3: screenshot-reviewer → 截图审核 + 补拍
 Step 5:   document-renderer → DOCX(嵌入实际截图)
 ```
@@ -201,12 +205,14 @@ Step 5:   document-renderer → DOCX(嵌入实际截图)
 1. `knowledge/database.yaml` —— 数据库 PKB
 2. `output/diagrams/er-diagram.png` —— ER 实体关系图
 3. `output/database-spec.md` —— Markdown 数据库说明书(含 ER 图)
-3. `output/数据库设计说明书.docx` —— 最终 DOCX
+4. `output/数据库设计说明书.docx` —— 最终 DOCX
 
 ### --type api
 1. `knowledge/apis.yaml` —— API PKB
-2. `output/api-doc.md` —— Markdown API 文档
-3. `output/API接口文档.docx` —— 最终 DOCX
+2. `output/diagrams/sequence-*.png` —— 接口时序图
+3. `output/diagrams/manifest.yaml` —— 图表清单
+4. `output/api-doc.md` —— Markdown API 文档(含时序图引用)
+5. `output/API接口文档.docx` —— 最终 DOCX
 
 ### --type all
 以上全部,共 3 份 DOCX 文档。
@@ -250,6 +256,6 @@ invoke_command:/doc-gen /path/to/project --type all
 | 参数 | 可选值 | 默认值 | 说明 |
 |------|--------|--------|------|
 | `--type` | manual / database / api / all | manual | 文档类型 |
-| `--deep` | - | 不启用 | 启用运行时探索(V1占位) |
+| `--deep` | - | 不启用 | 启用运行时探索(chrome-devtools-mcp,需用户先自行启动项目,在 writers 之前补全 PKB) |
 | `--format` | docx / pdf / html | docx | 输出格式 |
 | `--lang` | zh / en | zh | 文档语言 |

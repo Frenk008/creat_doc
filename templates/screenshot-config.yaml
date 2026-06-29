@@ -1,46 +1,49 @@
 # 截图配置模板
-# 用户需根据实际项目填写此文件,放到 knowledge/screenshot-config.yaml
-
-docker:
-  # Docker Compose 文件路径(相对于项目根目录)
-  compose_file: "docker-compose.yml"
-  # 启动后等待时间(秒),无 healthcheck 时使用
-  wait_seconds: 15
-  # 健康检查 URL(可选,如 Spring Boot Actuator)
-  # 配置后会轮询此 URL,成功后才开始截图
-  healthcheck_url: ""
-  # 是否在截图完成后自动关闭容器
-  auto_cleanup: true
+# 用户需先自行启动项目(如 docker compose up / npm run dev / java -jar 等),
+# 然后填写此文件,放到 knowledge/screenshot-config.yaml
 
 screenshot:
-  # 项目访问基础 URL(Docker 映射到宿主机的地址)
-  base_url: "http://localhost:8080"
   # 浏览器视口大小
   viewport:
     width: 1920
     height: 1080
   # 截图模式: viewport(仅可视区域) / full_page(整页)
-  default_mode: "viewport"
+  default_mode: "viewport"    # 当前不支持:脚本通过每张截图的 full_page 字段控制
   # 页面加载超时(毫秒)
-  page_timeout: 15000
+  page_timeout: 15000         # 当前不支持:脚本使用硬编码 timeout
   # 操作后等待时间(毫秒,等动画完成)
-  action_delay: 500
+  action_delay: 500           # 当前不支持:脚本通过每张截图的 wait_after_action 控制
+
+# 单前端项目:用 base_url
+base_url: "http://localhost:8080"
+
+# 多前端项目:用 apps 字典为每套前端指定独立的 base_url
+# pages.yaml 中的 app 字段决定每个页面用哪个 URL
+# 如果 apps 存在,优先使用 apps;否则用上面的 base_url
+apps:
+  admin:                      # 管理端
+    base_url: "http://localhost:8080"
+  client:                     # 用户端/C端
+    base_url: "http://localhost:3000"
+  # portal:                  # 门户端(如有)
+  #   base_url: "http://localhost:8081"
 
 # 测试账号(按角色配置)
-# webapp-testing 会用每个账号登录后截取对应角色的页面
+# 如果不同前端有不同账号体系,在对应角色下标注 app
 test_accounts:
   admin:
     username: "admin"
     password: "admin123"
     login_url: "/login"
-    # 登录成功后期望跳转到的 URL 片段(用于判断登录是否成功)
-    expected_redirect: "/dashboard"
+    expected_redirect: "/dashboard"  # 当前不支持:脚本用 URL 是否含 "login" 判断登录状态
+    app: "admin"              # 该账号登录哪套前端(单前端项目可省略)
   
   user:
     username: "testuser"
     password: "test123"
     login_url: "/login"
-    expected_redirect: "/home"
+    expected_redirect: "/home"       # 当前不支持:脚本用 URL 是否含 "login" 判断登录状态
+    app: "client"             # 该账号登录哪套前端
 
   # 如有更多角色,按同样格式添加
   # reviewer:
@@ -48,3 +51,4 @@ test_accounts:
   #   password: "review123"
   #   login_url: "/login"
   #   expected_redirect: "/review"
+  #   app: "admin"

@@ -26,6 +26,18 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def get_base_url(config: dict, app: str = None) -> str:
+    """
+    根据 app 标识获取对应的 base_url。
+    优先级:apps[app].base_url > base_url(全局)
+    支持单前端(只有 base_url)和多前端(apps 字典)。
+    """
+    apps = config.get("apps")
+    if apps and app and app in apps:
+        return apps[app].get("base_url", "")
+    return config.get("base_url", "")
+
+
 def load_plan(plan_path: str) -> list:
     """加载截图计划"""
     with open(plan_path, "r", encoding="utf-8") as f:
@@ -132,7 +144,7 @@ def login(page, base_url: str, login_url: str, account: dict):
 # 操作执行器
 # ============================================================
 
-def execute_action(page, action_desc: str, highlight: str = ""):
+def execute_action(page, action_desc: str):
     """
     解析截图计划中的操作描述并执行。
     使用关键词匹配,覆盖常见 UI 操作。
@@ -256,30 +268,48 @@ def highlight_element(page, highlight_desc: str):
 # 截图
 # ============================================================
 
-def capture_screenshot(page, shot: dict, output_dir: str) -> dict:
+def capture_screenshot(page, shot: dict, output_dir: str, config: dict = None) -> dict:
     """
     对单个截图计划执行截图。
+    根据 shot 中的 app 字段选择对应的 base_url 和 route(多前端/多主题支持)。
     返回更新后的 shot 字典(含 status 和可能的 error)。
     """
     shot_id = shot["id"]
-    route = shot.get("route", "/")
+    app = shot.get("app", "")
     action = shot.get("action", "")
     need_scroll = shot.get("need_scroll", False)
     highlight = shot.get("highlight", "")
     full_page = shot.get("full_page", False)
     wait_after_action = shot.get("wait_after_action", 500)
 
-    print(f"  截图 {shot_id}: {route} ({action})")
+    # 根据 app 选择 route:优先 routes[app],其次 route
+    routes = shot.get("routes") or {}
+    route = routes.get(app) or shot.get("route", "/")
+
+    # 根据 app 选择 base_url
+    if config:
+        base_url = get_base_url(config, app)
+    else:
+        base_url = ""
+
+    # 构建完整 URL
+    if route.startswith("http"):
+        full_url = route
+    elif base_url:
+        full_url = base_url + route
+    else:
+        full_url = route
+
+    print(f"  截图 {shot_id}: [{app or 'default'}] {full_url} ({action})")
 
     try:
         # 导航到页面
-        url = route if route.startswith("http") else route
-        page.goto(url, wait_until="networkidle", timeout=15000)
+        page.goto(full_url, wait_until="networkidle", timeout=15000)
         page.wait_for_timeout(500)
 
         # 执行前置操作
         if action:
-            execute_action(page, action, highlight)
+            execute_action(page, action)
             page.wait_for_timeout(wait_after_action)
 
         # 滚动
@@ -327,6 +357,7 @@ def main():
     parser.add_argument("--plan", default="knowledge/screenshots.yaml", help="截图计划文件路径")
     parser.add_argument("--output", default="output/screenshots", help="截图输出目录")
     parser.add_argument("--role", default=None, help="只截取指定角色的截图(默认全部)")
+    parser.add_argument("--retake", dest="retake", default=None, help="Path to retake-list.yaml for selective recapture")
     args = parser.parse_args()
 
     # 加载配置
@@ -337,16 +368,25 @@ def main():
         print("错误: 截图计划为空", file=sys.stderr)
         sys.exit(1)
 
-    base_url = config["screenshot"]["base_url"]
-    viewport = config["screenshot"].get("viewport", {"width": 1920, "height": 1080})
+    base_url = config.get("base_url", "")  # 全局 base_url(单前端)
+    screenshot_config = config.get("screenshot", {})
+    viewport = screenshot_config.get("viewport", {"width": 1920, "height": 1080})
     test_accounts = config.get("test_accounts", {})
 
     # 过滤角色
     if args.role:
-        plan = [s for s in plan if args.role in s.get("roles", [])]
+        plan = [s for s in plan if not s.get("roles") or args.role in s.get("roles", [])]
         if not plan:
             print(f"错误: 角色 {args.role} 没有对应的截图计划", file=sys.stderr)
             sys.exit(1)
+
+    # 补拍模式:仅重新采集 retake-list.yaml 中列出的截图
+    if args.retake and os.path.exists(args.retake):
+        with open(args.retake, encoding="utf-8") as f:
+            retake_data = yaml.safe_load(f) or {}
+        retake_ids = [r["id"] for r in retake_data.get("retakes", [])]
+        plan = [s for s in plan if s.get("id") in retake_ids]
+        print(f"补拍模式: 仅采集 {len(plan)} 张截图")
 
     # 导入 Playwright
     try:
@@ -363,31 +403,62 @@ def main():
 
         # 如果有测试账号,分角色截图;否则只截无需登录的部分
         if test_accounts:
+            # 通用截图(无 roles 字段):使用第一个账号采集一次,避免每个角色重复采集
+            universal_plan = [s for s in plan if not s.get("roles")]
+
+            if universal_plan:
+                first_role_name = next(iter(test_accounts))
+                first_account = test_accounts[first_role_name]
+                account_app = first_account.get("app", "")
+                login_base_url = get_base_url(config, account_app) or base_url
+
+                print(f"\n{'='*50}")
+                print(f"通用截图 [{account_app or 'default'}] → {login_base_url}")
+                print(f"{'='*50}")
+
+                context = browser.new_context(viewport=viewport)
+                page = context.new_page()
+                login_url = first_account.get("login_url", "/login")
+                try:
+                    login(page, login_base_url, login_url, first_account)
+                    # 逐页截图(capture_screenshot 会根据每个 shot 的 app 字段自动选 base_url)
+                    for shot in universal_plan:
+                        result = capture_screenshot(page, shot, args.output, config)
+                        results.append(result)
+                except Exception as e:
+                    print(f"  ❌ 登录失败: {e}")
+                    print(f"  跳过通用截图")
+                    for shot in universal_plan:
+                        shot["status"] = "failed"
+                        shot["error"] = f"登录失败: {e}"
+                        results.append(shot)
+                context.close()
+
+            # 角色专属截图:为每个账号采集其角色对应的截图(自动排除通用截图)
             for role_name, account in test_accounts.items():
                 if args.role and args.role != role_name:
                     continue
 
+                # 角色过滤:仅显式包含当前角色的截图(通用截图已在上方采集一次)
+                role_plan = [s for s in plan if role_name in s.get("roles", [])]
+                if not role_plan:
+                    continue
+
+                # 根据 account 的 app 字段选择登录用的 base_url
+                account_app = account.get("app", "")
+                login_base_url = get_base_url(config, account_app) or base_url
+
                 print(f"\n{'='*50}")
-                print(f"角色: {role_name}")
+                print(f"角色: {role_name} [{account_app or 'default'}] → {login_base_url}")
                 print(f"{'='*50}")
 
                 context = browser.new_context(viewport=viewport)
                 page = context.new_page()
 
-                # 设置 base_url 为默认导航前缀
-                # Playwright 的 goto 需要完整 URL
-                role_plan = []
-                for shot in plan:
-                    shot_copy = shot.copy()
-                    route = shot_copy.get("route", "/")
-                    if not route.startswith("http"):
-                        shot_copy["route"] = base_url + route
-                    role_plan.append(shot_copy)
-
                 # 登录
                 login_url = account.get("login_url", "/login")
                 try:
-                    login(page, base_url, login_url, account)
+                    login(page, login_base_url, login_url, account)
                 except Exception as e:
                     print(f"  ❌ 登录失败: {e}")
                     print(f"  跳过角色 {role_name} 的截图")
@@ -398,9 +469,9 @@ def main():
                     context.close()
                     continue
 
-                # 逐页截图
+                # 逐页截图(capture_screenshot 会根据每个 shot 的 app 字段自动选 base_url)
                 for shot in role_plan:
-                    result = capture_screenshot(page, shot, args.output)
+                    result = capture_screenshot(page, shot, args.output, config)
                     results.append(result)
 
                 context.close()
@@ -409,15 +480,17 @@ def main():
             context = browser.new_context(viewport=viewport)
             page = context.new_page()
             for shot in plan:
-                shot_copy = shot.copy()
-                route = shot_copy.get("route", "/")
-                if not route.startswith("http"):
-                    shot_copy["route"] = base_url + route
-                result = capture_screenshot(page, shot_copy, args.output)
+                result = capture_screenshot(page, shot, args.output, config)
                 results.append(result)
             context.close()
 
         browser.close()
+
+    # 按 shot id 去重(保留最后一条结果),避免通用截图被重复写入
+    seen = {}
+    for r in results:
+        seen[r["id"]] = r
+    results = list(seen.values())
 
     # 更新截图计划文件
     with open(args.plan, "w", encoding="utf-8") as f:

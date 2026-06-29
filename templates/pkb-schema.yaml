@@ -30,7 +30,12 @@ modules:
 # ---- pages.yaml: 页面/界面 ----
 pages:
   - id: ""                    # 唯一标识(如 user-list)
-    route: ""                 # 路由路径(如 /users)
+    app: "default"            # 所属前端应用标识(如 admin / client / portal),多套前端时区分
+    route: ""                 # 默认路由路径(如 /users)
+    routes:                   # 多主题/多前端的路由映射(同一页面的不同路由)
+      # default: "/console/topup"    # default 主题的路由
+      # classic: "/wallet"           # classic 主题的路由
+      # 如所有主题路由一致则留空,只用 route 字段
     title: ""                 # 页面标题(中文)
     menu_path: ""             # 菜单层级(如"系统管理 > 用户管理")
     module_id: ""             # 所属模块 ID
@@ -170,19 +175,60 @@ apis:
             message: ""
 
 # ---- screenshots.yaml: 截图计划(由 screenshot-planner 生成) ----
+# 注意:只有 action / need_scroll / highlight / full_page / wait_after_action
+# 会被截图脚本 generate_screenshots.py 实际消费;
+# route / menu_path / prerequisite_shots / need_dialog / need_expand /
+# need_confirm / need_error_state / data_state 为规划信息,供人工补拍与后续扩展。
 screenshots:
   - id: ""                    # 如 shot-5-2
     manual_ref: ""            # 对应手册位置(如"5.2 创建用户-步骤3")
     page_id: ""               # 需要截图的页面
-    action: ""                # 截图前的操作
-    need_scroll: false        # 是否需要滚动
-    highlight: ""             # 需要高亮的元素
-    data_state: ""            # 需要的数据状态(如"列表已有3条记录")
-    status: "planned"         # planned / captured / reviewed / failed
+    app: ""                   # 所属前端应用(从 pages.app 复制,决定用哪个 base_url)
+    route: ""                 # 页面路由(供 webapp-testing 导航)
+    routes: {}                # 多主题路由映射(如 {admin: "/admin/users", user: "/users"},从 pages.routes 复制)
+    menu_path: ""             # 菜单路径(参考)
+    action: ""                # 截图前的操作(脚本消费)
+    need_scroll: false        # 是否需要滚动(脚本消费)
+    highlight: ""             # 需要高亮的元素(脚本消费)
+    full_page: false          # 是否整页截图(脚本消费)
+    wait_after_action: 500    # 操作后等待毫秒(脚本消费)
+    data_state: ""            # 需要的数据状态(规划信息,脚本不自动构造)
+    prerequisite_shots: []    # 依赖的前置截图ID(规划信息)
+    need_dialog: false        # 需触发弹窗(规划信息,用 action 描述触发)
+    need_expand: false        # 需展开下拉(规划信息,用 action 描述触发)
+    need_confirm: false       # 需触发确认提示(规划信息)
+    need_error_state: false   # 需制造错误输入(规划信息)
+    roles: []                 # 适用角色(多角色截图过滤)
+    status: "planned"         # planned / captured / partial / failed / reviewed / need_retake
 
-# ---- runtime.yaml: 运行时探索发现(V1 留空,V2 补充) ----
+# ---- runtime.yaml: 运行时探索发现(由 runtime-explorer 在 --deep 模式写入) ----
+# 字段名与 runtime-explorer 实际产出的 runtime.yaml 结构一致。
 runtime:
-  dialogs: []                 # 运行时发现的对话框/弹窗
-  dynamic_fields: []          # 动态表单字段
-  validation_rules: []        # 表单校验规则
-  status: "not_explored"      # not_explored / partial / complete
+  status: "not_explored"        # not_explored / partial / complete / timeout / auth_failed / failed
+  explored_at: ""               # 探索时间
+  explored_pages: []            # 实际探索的页面ID
+  total_pages: 0                # pages.yaml 中的页面总数
+  explored_count: 0             # 实际探索的页面数
+  discovered_dialogs:           # 运行时发现的对话框/弹窗
+    - trigger_page: ""          # 触发页面ID
+      trigger_action: ""        # 触发动作(如 click_create_button)
+      dialog_type: ""           # modal / drawer / page
+      dialog_title: ""
+      fields: []                # 弹窗中的表单字段
+      submit_button: ""
+      cancel_button: ""
+  discovered_validation_rules:  # 表单校验规则
+    - page: ""
+      field: ""
+      rules:                    # 规则列表
+        - type: ""              # required / length / email / ...
+          message: ""
+  discovered_dynamic_elements:  # 动态加载元素
+    - page: ""
+      element: ""
+      trigger: ""
+      dependency: ""
+  discovered_feedback_messages: # 操作反馈提示
+    - trigger: ""
+      message: ""
+      type: ""                  # success / error / warning / info

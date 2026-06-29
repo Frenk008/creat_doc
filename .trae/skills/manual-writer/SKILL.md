@@ -11,6 +11,8 @@ description: "用户手册生成器。读取 PKB YAML 知识库,按照标准大�
 
 - PKB 目录:`knowledge/`(包含 project.yaml, modules.yaml, pages.yaml, roles.yaml, workflows.yaml 等)
 - 大纲模板:`templates/manual-outline.md`
+- `knowledge/runtime.yaml` —— 运行时探索结果(可选。若存在,读取 discovered_validation_rules 和 discovered_feedback_messages,在功能说明中补充表单校验提示和操作反馈信息)
+- `output/diagrams/manifest.yaml` —— 图表清单(可选。若存在,在对应功能章节嵌入流程图和功能总览图引用)
 
 ## 输出
 
@@ -129,6 +131,14 @@ A: 请检查以下几点：
 
 （仅当 PKB 中确实存在登录功能时才生成此条）
 ```
+
+### 8. 图表嵌入
+
+**图表嵌入:** 若 manifest.yaml 存在,遍历其中 status: rendered 的图表条目,在对应章节嵌入:
+- type: component → 嵌入到"2 系统功能概览",引用路径为 manifest 中的 `file` 字段值
+- type: flow → 嵌入到"6 常见业务流程"对应流程处,引用路径为 manifest 中的 `file` 字段值
+- 嵌入格式:`![{title}]({file})`,其中 {title} 和 {file} 均从 manifest.yaml 读取,不硬编码文件名
+- status: failed 的图表用文字描述替代,不嵌入断裂链接
 
 ## 严格约束
 

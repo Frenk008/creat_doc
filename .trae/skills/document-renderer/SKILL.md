@@ -1,15 +1,15 @@
 ---
 name: "document-renderer"
-description: "文档渲染器。将审核后的 Markdown 用户手册渲染为 DOCX/PDF/HTML 格式的正式文档。支持自动生成目录、图片占位框、章节编号格式化。当 qa-reviewer 完成审核后,或 doc-gen 编排器调用时使用。"
+description: "文档渲染器。将审核后的 Markdown 文档渲染为 DOCX/PDF/HTML 格式的正式文档。支持自动生成目录、图片占位框、章节编号格式化。当 qa-reviewer 完成审核后,或 doc-gen 编排器调用时使用。"
 ---
 
 # Document Renderer —— 文档渲染器
 
-你的任务是将 Markdown 用户手册渲染为可直接交付的 DOCX(或 PDF/HTML)文档。
+你的任务是将 Markdown 文档渲染为可直接交付的 DOCX(或 PDF/HTML)文档。
 
 ## 输入
 
-- `output/manual.md` —— 审核后的 Markdown 手册
+- `output/manual.md` 或 `output/database-spec.md` 或 `output/api-doc.md` —— 待渲染的 Markdown 文档(根据文档类型,接受任意 output/*.md)
 - `output/format` —— 目标格式(默认 docx)
 
 ## 输出
@@ -38,6 +38,16 @@ pandoc output/manual.md \
 - `--toc`: 自动生成目录
 - `--toc-depth=3`: 目录深度为3级
 - `--number-sections`: 自动章节编号
+
+**reference.docx 处理(关键,避免报错):**
+`templates/reference.docx` 在新仓库中**默认不存在**。按以下优先级处理,缺失时不得直接报错:
+1. 若 `templates/reference.docx` 存在 → 直接使用。
+2. 若不存在但有 pandoc → 先用以下命令生成默认模板,再用其渲染:
+   ```bash
+   pandoc -o templates/reference.docx --print-default-data-file reference.docx
+   ```
+3. 若生成失败或无 pandoc → **去掉 `--reference-doc` 参数**继续渲染(使用 pandoc 默认样式),并在日志提示"reference.docx 未生成,使用默认样式"。
+4. 若连 pandoc 都没有 → 转方案 B(python-docx),其样式由代码内联设置,不依赖 reference.docx。
 
 **如无 reference.docx**,先用以下命令生成默认模板:
 ```bash
@@ -114,6 +124,24 @@ pandoc output/manual.md -o output/manual.html --standalone --toc
 ```
 
 然后提示用户用 Word 打开 HTML 并另存为 DOCX。
+
+### PDF 输出方案 (当 --format pdf 时)
+
+- **方案 D: Pandoc + LaTeX**
+  ```bash
+  pandoc output/manual.md -o output/用户使用手册.pdf \
+    --pdf-engine=xelatex \
+    -V CJKmainfont="Microsoft YaHei" \
+    --toc --toc-depth=3 --number-sections
+  ```
+  需要 TeX 发行版(如 TeX Live 或 MiKTeX)。
+- **方案 E: 先生成 DOCX 再转换(Pandoc 不可用时的降级)**
+  先用方案 A/B 生成 DOCX,再用 LibreOffice 转换:
+  ```bash
+  libreoffice --headless --convert-to pdf output/用户使用手册.docx
+  ```
+  需要 LibreOffice。
+- **若 LaTeX 和 LibreOffice 均不可用**: 回退为 HTML 输出,提示用户"PDF 引擎不可用,已输出 HTML"
 
 ## 图片占位渲染
 

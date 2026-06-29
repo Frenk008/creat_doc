@@ -201,30 +201,34 @@ diagrams:
   - id: "er-diagram"
     type: "er"
     source: "database.yaml"
-    file: "output/diagrams/er-diagram.png"
-    puml: "output/diagrams/temp/er-diagram.puml"
+    file: "diagrams/er-diagram.png"
+    puml: "diagrams/temp/er-diagram.puml"
     title: "数据库 ER 图"
+    status: "rendered"    # rendered / failed
 
   - id: "sequence-create-user"
     type: "sequence"
     source: "workflows.yaml#create-user"
-    file: "output/diagrams/sequence-create-user.png"
+    file: "diagrams/sequence-create-user.png"
     title: "创建用户 - 时序图"
+    status: "rendered"
 
   - id: "flow-main-business"
     type: "flow"
     source: "workflow_chains.yaml"
-    file: "output/diagrams/flow-main-business.png"
+    file: "diagrams/flow-main-business.png"
     title: "核心业务流程图"
+    status: "rendered"
 
   - id: "module-overview"
     type: "component"
     source: "modules.yaml"
-    file: "output/diagrams/module-overview.png"
+    file: "diagrams/module-overview.png"
     title: "系统功能总览图"
+    status: "rendered"
 ```
 
-writers 读取此清单,在 Markdown 中引用对应图片。
+writers 读取此清单,在 Markdown 中引用对应图片(路径相对于 output/ 目录)。仅嵌入 status: rendered 的图表;status: failed 的用文字描述替代。
 
 ---
 
@@ -271,7 +275,18 @@ writers 读取此清单,在 Markdown 中引用对应图片。
 
 ### Step 3: 保存并渲染
 
+**两种模式必须区分清楚(脚本默认 format=docx 且会打开浏览器):**
+
 ```bash
+# ✅ PKB 驱动模式(本 Skill 主路径):输出 PNG,禁止打开浏览器
+python <skill-path>/scripts/generate.py \
+  --code @output/diagrams/temp/{diagram_name}.puml \
+  --output output/diagrams/{diagram_name}.png \
+  --format png \
+  --no-browser
+
+# ⚠️ 自然语言模式(模式 B,独立使用):输出 DOCX,可选打开浏览器
+# 若不传 --no-browser,脚本会打开 PlantUML 在线编辑器
 python <skill-path>/scripts/generate.py \
   --request "用户的自然语言描述" \
   --code @plantuml_temp.puml \
@@ -281,8 +296,8 @@ python <skill-path>/scripts/generate.py \
 脚本行为:
 1. 将 PlantUML 文本编码为 URL 安全格式
 2. 从 PlantUML 服务器下载渲染的 PNG
-3. 创建 Word 文档,包含:用户请求、PlantUML 源码、图表 URL、渲染图片
-4. 在浏览器打开 PlantUML 在线编辑器供进一步编辑
+3. (format=docx 时)创建 Word 文档,包含:用户请求、PlantUML 源码、图表 URL、渲染图片
+4. (未传 --no-browser 时)在浏览器打开 PlantUML 在线编辑器供进一步编辑
 
 ### Step 4: 交付结果
 

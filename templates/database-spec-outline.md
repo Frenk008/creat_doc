@@ -98,9 +98,9 @@
 
 > 基于 er_relations 生成表间关系说明
 
-| 序号 | 主表 | 从表 | 关系类型 | 关联字段 | 说明 |
-|------|------|------|----------|----------|------|
-| 1 | {rel.from_table} | {rel.to_table} | {rel.type} | {via_field} | {rel.description} |
+| 序号 | 主表 | 从表 | 关系类型 | 说明 |
+|------|------|------|----------|------|
+| 1 | {rel.from_table} | {rel.to_table} | {rel.type} | {rel.description} |
 
 ## 4.2 关系图说明
 

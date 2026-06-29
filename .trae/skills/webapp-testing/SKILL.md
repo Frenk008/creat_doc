@@ -1,30 +1,31 @@
 ---
 name: "webapp-testing"
-description: "Web应用自动化截图采集器(V2)。通过Docker启动项目,使用Playwright按照截图计划批量采集界面截图。当screenshot-planner完成截图规划后,或doc-gen编排器调用时使用。"
+description: "Web应用自动化截图采集器(V2)。连接用户已启动的项目,使用Playwright按照截图计划批量采集界面截图。当screenshot-planner完成截图规划后,或doc-gen编排器调用时使用。"
 ---
 
 # WebApp Testing —— Web 应用自动化截图采集器
 
-你的任务是通过 Docker 启动目标项目,使用 Playwright 按照 `screenshots.yaml` 截图计划批量采集实际界面截图。
+你的任务是连接到用户已启动的目标项目,使用 Playwright 按照 `screenshots.yaml` 截图计划批量采集实际界面截图。
 
 ## 前置条件
 
-1. 目标项目包含 `docker-compose.yml`(或 `docker-compose.yaml`)
-2. 系统已安装 Docker 和 Docker Compose
-3. 系统已安装 Playwright(`pip install playwright && playwright install chromium`)
-4. 用户提供截图配置文件 `knowledge/screenshot-config.yaml`
+1. **用户已自行启动项目**并通过浏览器确认可以正常访问(不负责启动项目)
+2. 系统已安装 Playwright(`pip install playwright && playwright install chromium`)
+3. 用户提供截图配置文件 `knowledge/screenshot-config.yaml`(含访问 URL + 测试账号)
 
 ## 输入
 
 - `knowledge/screenshots.yaml` —— 截图计划(由 screenshot-planner 生成)
-- `knowledge/screenshot-config.yaml` —— 截图配置(Docker、账号、URL 等)
+- `knowledge/screenshot-config.yaml` —— 截图配置(URL、账号等)
 - `knowledge/pages.yaml` —— 页面路由信息(辅助登录)
+- `output/retake-list.yaml` —— 补拍清单(可选,由 screenshot-reviewer 产出。若存在则仅补拍其中列出的截图 ID)
 
 ## 输出
 
 - `output/screenshots/*.png` —— 采集的截图文件
 - 更新 `knowledge/screenshots.yaml` 中每条记录的 `status`
-- `output/screenshot-capture-report.md` —— 采集报告
+- `output/capture-result.json` —— 结构化采集结果(**供 screenshot-reviewer 读取**),字段:`total` / `captured` / `partial` / `failed` / `results[]`,其中每个 result 含 `id` / `status`(captured / partial / failed) / `error`
+- `output/screenshot-capture-report.md` —— 人类可读的采集报告
 
 ## 执行流程
 
@@ -33,50 +34,28 @@ description: "Web应用自动化截图采集器(V2)。通过Docker启动项目,�
 读取 `knowledge/screenshot-config.yaml`,如不存在则引导用户创建(模板见 `templates/screenshot-config.yaml`)。
 
 **校验项:**
-- docker.compose_file 指向的文件存在
 - screenshot.base_url 非空
 - test_accounts 至少有一个角色
 - screenshots.yaml 中有 `status: planned` 的记录
 
-### Step 2: Docker 启动项目
+### Step 2: 连接性检测
+
+检查 `base_url` 是否可访问(用户应已自行启动项目):
 
 ```bash
-# 进入项目目录
-cd {project_root}
-
-# 启动容器(后台模式)
-docker compose -f {compose_file} up -d
-
-# 等待服务就绪
+# 尝试访问 base_url,最多重试 3 次
+curl -sf {base_url} --connect-timeout 5
 ```
 
-**就绪检测策略(按优先级):**
+**如果 base_url 不可达:**
+- 提示用户:"项目尚未启动或地址不正确,请先启动项目并确认浏览器能正常访问 {base_url}"
+- 提示用户检查:screenshot-config.yaml 中的 base_url 和端口是否正确
+- 等待用户确认后重试,**不自行启动项目**
 
-1. 如果配置了 `healthcheck_url`:
-```bash
-# 轮询健康检查接口,最多等 120 秒
-for i in $(seq 1 24); do
-    curl -sf {healthcheck_url} && break
-    sleep 5
-done
-```
+**如果 base_url 可达:** 继续下一步。
 
-2. 如果未配置 healthcheck,等待 `wait_seconds`(默认 15 秒),再尝试访问 base_url:
-```bash
-# 轮询 base_url,最多等 60 秒
-for i in $(seq 1 12); do
-    curl -sf {base_url} && break
-    sleep 5
-done
-```
-
-3. 如果 base_url 仍不可达,报告错误并询问用户是否继续。
-
-**Docker 启动失败处理:**
-- 检查 `docker compose logs` 输出
-- 端口冲突 → 提示用户修改端口映射
-- 镜像不存在 → 提示用户先 `docker compose build`
-- 依赖服务未启动 → 等待重试
+**多套前端处理:**
+如果 `screenshot-config.yaml` 中配置了 `apps`(多套前端),脚本会根据每张截图的 `app` 字段自动选择对应的 base_url。无需手动区分,用户只需确保所有前端应用都已启动。
 
 ### Step 3: 生成 Playwright 截图脚本
 
@@ -109,10 +88,21 @@ page.fill("input[name='username'], input#username", account["username"])
 page.fill("input[name='password'], input#password", account["password"])
 page.click("button[type='submit'], button:has-text('登录'), button:has-text('Login')")
 # 等待跳转离开登录页
-page.wait_for_url(f"**{dashboard_route}", timeout=10000)
+page.wait_for_url(f"**{account['expected_redirect']}", timeout=10000)
 ```
 
 **页面导航 + 截图:**
+
+**补拍模式:** 若 `output/retake-list.yaml` 存在,仅采集其中列出的截图 ID,覆盖原文件。读取方式:
+```python
+if os.path.exists("output/retake-list.yaml"):
+    with open("output/retake-list.yaml", encoding="utf-8") as f:
+        retake_data = yaml.safe_load(f) or {}
+    # screenshot-reviewer 产出格式: {retakes: [{id: "...", ...}, ...]}
+    retake_ids = [r["id"] for r in retake_data.get("retakes", [])]
+    screenshots = [s for s in screenshots if s["id"] in retake_ids]
+```
+
 ```python
 for shot in screenshots:
     try:
@@ -121,9 +111,9 @@ for shot in screenshots:
         page.wait_for_load_state("networkidle", timeout=15000)
         
         # 前置操作(如需点击触发弹窗)
-        if shot.get("prerequisite_action"):
+        if shot.get("action"):
             # 根据 screenshot-planner 的 action 描述执行
-            execute_action(page, shot["prerequisite_action"])
+            execute_action(page, shot["action"])
             page.wait_for_timeout(500)  # 等待动画
         
         # 需要滚动的场景
@@ -201,14 +191,9 @@ for role_name, account in test_accounts.items():
 1. 更新 `knowledge/screenshots.yaml` 中每条记录的 `status`(`captured` / `failed`)
 2. 生成采集报告 `output/screenshot-capture-report.md`
 
-### Step 6: Docker 清理
+### Step 6: 清理
 
-```bash
-# 停止并清理容器(保留数据卷)
-docker compose -f {compose_file} down
-```
-
-**如果用户要求保留容器运行**(用于调试),跳过此步骤。
+如用户通过 Docker 启动项目,提示用户自行清理容器(本 Skill 不负责停止项目)。
 
 ## 采集报告格式
 
@@ -217,7 +202,6 @@ docker compose -f {compose_file} down
 
 ## 采集概况
 - 采集时间：{时间}
-- Docker 容器：{状态}
 - 计划截图数：{总数}
 - 成功采集：{成功数}
 - 采集失败：{失败数}
@@ -239,13 +223,10 @@ docker compose -f {compose_file} down
 
 | 错误场景 | 处理方式 |
 |---------|---------|
-| Docker 未安装 | 提示安装 Docker Desktop |
-| docker compose 启动失败 | 输出 `docker compose logs`,询问用户 |
 | Playwright 未安装 | 提示 `pip install playwright && playwright install chromium` |
 | 登录失败 | 尝试备用选择器,仍失败则跳过需登录的截图 |
 | 页面导航超时 | 记录 timeout,该页截图标记 failed |
 | 元素未找到 | 截当前页面作为兜底,标记为 partial |
-| 端口冲突 | 提示修改 compose 中的端口映射 |
 
 ## 文件编码规范
 
@@ -253,7 +234,7 @@ docker compose -f {compose_file} down
 
 ## 严格约束
 
-1. **不修改项目源码**:只通过 Docker 启动和浏览器操作,不修改项目任何文件。
+1. **不修改项目源码**:只通过浏览器操作进行截图采集(不负责启动/停止项目),不修改项目任何文件。
 2. **截图计划为准**:只截取 screenshots.yaml 中列出的页面,不自行增加。
 3. **失败不阻塞**:单张截图失败不影响其他截图,继续执行后续计划。
-4. **清理资源**:采集完成后必须关闭浏览器;Docker 容器默认关闭(除非用户要求保留)。
+4. **清理资源**:采集完成后必须关闭浏览器。

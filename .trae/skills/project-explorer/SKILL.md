@@ -27,8 +27,66 @@ description: "静态源码分析器。自动探测项目技术栈(Java/Go/多前
 2. 再抽样读 3-5 个前端文件,确认前端框架(检查 `vite.config` / `next.config` / `nuxt.config` / `angular.json`)
 3. 检查路由配置文件确认路由方式
 4. 检查是否有数据库相关配置(`application.yml` / `config.yaml` / `.env`)
+5. **多套前端识别**:扫描是否存在多个独立的前端应用。判断依据:
+   - 存在多个 `package.json`(如根目录 + `admin/` 子目录 + `client/` 子目录)
+   - 存在多个 `vite.config` / `next.config` / `nuxt.config` / `vue.config`
+   - 项目根目录下有明显的分端目录(如 `admin/` + `client/`,或 `web/` + `mobile/`)
+   - 有多个独立的 `router/index.js` 或路由配置文件(不同目录下)
 
-产出 `knowledge/project.yaml`,格式参考 `templates/pkb-schema.yaml` 中的 project 部分。
+**多套前端的 app 标识规则:**
+- 每识别出一套独立前端,分配一个 `app` 标识
+- 标识名从目录名推导(如 `admin/` → app="admin",`client/` → app="client")
+- 如果只有单套前端,统一用 `app: "default"`
+- 所有该前端下的页面,pages.yaml 中的 `app` 字段填写对应标识
+
+**示例(两套前端):**
+```
+项目根/
+├── admin/              → app="admin"
+│   ├── package.json
+│   ├── src/router/     → 这些页面的 app="admin"
+│   └── ...
+├── client/             → app="client"
+│   ├── package.json
+│   ├── src/router/     → 这些页面的 app="client"
+│   └── ...
+└── server/             → 后端(不分配 app)
+```
+
+产出 `knowledge/project.yaml` 中增加 `apps` 字段:
+```yaml
+tech_stack:
+  frontend_apps:          # 多套前端列表(单前端则只有 default)
+    - id: "admin"
+      name: "管理端"
+      framework: "vue3"
+      base_path: "admin/"
+    - id: "client"
+      name: "用户端"
+      framework: "react"
+      base_path: "client/"
+```
+
+**主题/多路由映射识别:**
+
+某些项目支持多主题(如 default / classic),同一页面在不同主题下路由路径不同。识别依据:
+- 代码中存在路由映射表/重定向配置(如 `redirect` / `alias` / `pathMap`)
+- 配置文件中有主题切换 + 对应的路由前缀差异
+- 前端代码中有 `if theme === 'classic'` 类的路由分支
+
+发现路由映射时,在 pages.yaml 中填充 `routes` 字段:
+```yaml
+pages:
+  - id: "topup"
+    app: "default"
+    route: "/console/topup"          # 默认路由
+    routes:                           # 多主题路由映射
+      default: "/console/topup"
+      classic: "/wallet"
+    title: "充值"
+```
+
+如未发现路由映射,`routes` 留空,只用 `route` 字段(所有主题共享同一路由)。
 
 ### 阶段 2: 按技术栈选策略扫描
 
@@ -367,3 +425,4 @@ knowledge/
 - [ ] pages.yaml 是否至少包含 1 个页面
 - [ ] roles.yaml 是否包含角色信息(如代码中存在权限控制)
 - [ ] 所有 YAML 格式是否正确(无语法错误)
+- 当 --type 为 manual/all 时,验证 workflows.yaml 中 workflow_chains 段存在且非空

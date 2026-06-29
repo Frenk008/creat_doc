@@ -9,7 +9,7 @@ description: "运行时探索器(V2)。通过chrome-devtools-mcp连接已启动�
 
 ## 前置条件
 
-1. 目标项目已通过 Docker 启动(webapp-testing Step 2 已执行,或用户手动启动)
+1. 目标项目已由用户自行启动(用户已确认浏览器可以访问 base_url)
 2. 项目可通过浏览器访问(有 base_url)
 3. chrome-devtools-mcp 已集成(本环境已内置)
 
@@ -152,8 +152,8 @@ discovered_dialogs:
         label: "角色"
         type: "select"
         options: ["管理员", "普通用户", "审核员"]
-    submit_button_text: "确定"
-    cancel_button_text: "取消"
+    submit_button: "确定"
+    cancel_button: "取消"
 ```
 
 #### 3.4 探索表单校验
@@ -204,7 +204,7 @@ click(selector="button:has-text('取消')")  # 或 press_key(key="Escape")
 
 ```yaml
 runtime:
-  status: "complete"            # complete / partial / failed
+  status: "complete"            # not_explored / partial / complete / timeout / auth_failed / failed
   explored_at: "{时间}"
   explored_pages: ["login", "user-list", "user-create", "role-list"]
   total_pages: 15               # pages.yaml 中的页面总数

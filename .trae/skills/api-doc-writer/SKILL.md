@@ -13,6 +13,7 @@ description: "API接口文档生成器。读取 PKB 中的 apis.yaml,按照标�
 - `knowledge/project.yaml` —— 项目基本信息
 - `knowledge/roles.yaml` —— 角色信息(用于接口权限说明)
 - 大纲模板:`templates/api-doc-outline.md`
+- `output/diagrams/manifest.yaml` —— 图表清单(可选。若存在,在接口分组中嵌入时序图 sequence-*.png)
 
 ## 输出
 

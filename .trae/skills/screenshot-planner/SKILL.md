@@ -44,8 +44,14 @@ description: "截图计划生成器。读取生成的用户手册和 PKB,为每�
 
 记录:
 - `page_id`: 页面 ID
-- `route`: 页面路由(供 webapp-testing 导航使用)
+- `app`: 所属前端应用(从 pages.app 复制,多套前端时用于选择 base_url)
+- `route`: 页面默认路由(从 pages.route 复制)
+- `routes`: 多主题路由映射(从 pages.routes 复制,如有)
 - `menu_path`: 菜单路径
+
+> **多套前端注意**:如果项目有两套前端(如 admin + client),pages.yaml 中每个页面会有 `app` 字段区分。截图计划中必须带上 `app` 字段,这样 webapp-testing 才知道用哪个 base_url 访问该页面。
+>
+> **多主题路由映射**:如果同一页面在不同主题下路由不同(如 default 的 `/console/topup` 对应 classic 的 `/wallet`),pages.yaml 会有 `routes` 字典。截图计划也需复制 `routes`,这样脚本会根据 screenshot-config 中实际运行的 app/主题选择正确路由。
 
 ### Step 3: 推导截图上下文
 
@@ -59,8 +65,11 @@ description: "截图计划生成器。读取生成的用户手册和 PKB,为每�
   action: "填写创建用户表单"
   need_scroll: false
   highlight: "姓名输入框、角色选择框"     # 需要高亮/标注的区域
+  full_page: false                        # 是否整页截图(默认 false)
+  wait_after_action: 500                  # 操作后等待毫秒(默认 500)
   data_state: "已点击新增按钮,对话框已弹出" # 截图时系统应处于的状态
   prerequisite_shots: ["shot-5-2-1", "shot-5-2-2"] # 此截图依赖的前置截图
+  roles: ["管理员"]                        # 适用角色(多角色截图时过滤;不填=所有角色通用)
   status: "planned"
 ```
 
@@ -81,6 +90,8 @@ description: "截图计划生成器。读取生成的用户手册和 PKB,为每�
 | 下拉选择 | 标注 `need_expand: true`,需展开下拉框 |
 | 确认操作 | 标注 `need_confirm: true`,需触发确认提示 |
 | 错误提示 | 标注 `need_error_state: true`,需制造错误输入 |
+
+> **字段生效说明(重要)**:当前截图脚本 `templates/generate_screenshots.py` 仅消费 `action` / `need_scroll` / `highlight` / `full_page` / `wait_after_action` 这几个字段。上表中的 `need_dialog` / `need_expand` / `need_confirm` / `need_error_state`，以及 `data_state` / `prerequisite_shots` / `menu_path` 属于**规划信息**，用于人工补拍参考和后续版本扩展，**当前不会被脚本自动执行**。其中触发弹窗/展开下拉等动作应尽量在 `action` 字段中用自然语言描述（如"点击新增按钮"），由脚本的 `execute_action` 关键词匹配执行。
 
 ## 输出格式
 
@@ -115,5 +126,5 @@ screenshots:
 
 1. **手册中每个图片占位必须有对应的截图计划**,不遗漏。
 2. **截图计划必须基于 PKB 中的实际页面**,不得为不存在的页面规划截图。
-3. **数据状态描述必须具体可执行**,如"列表已有3条记录"而非"有一些数据"。
-4. **V1 不执行实际截图**,只输出计划。`status` 统一为 `planned`。
+3. **数据状态描述必须具体可执行**,如"列表已有3条记录"而非"有一些数据"。注意:`data_state` 当前仅作为**人工补拍/造数的参考说明**,截图脚本不会自动构造该数据状态;若某截图强依赖特定数据,应在审核阶段人工准备数据或手动补拍。
+4. **本 Skill 仅输出截图计划**,不执行实际截图。`status` 统一为 `planned`。后续状态流转由下游推进:planned →(webapp-testing)captured/partial/failed →(screenshot-reviewer)reviewed/need_retake/failed。
