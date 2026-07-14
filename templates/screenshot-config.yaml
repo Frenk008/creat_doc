@@ -1,12 +1,51 @@
 # 截图配置模板
 # 用户需先自行启动项目(如 docker compose up / npm run dev / java -jar 等),
 # 然后填写此文件,放到 knowledge/screenshot-config.yaml
+# 安全提示:password 字段推荐使用 ${ENV_VAR} 引用环境变量,不要将明文密码提交到 git
 
 screenshot:
   # 浏览器视口大小
   viewport:
     width: 1920
     height: 1080
+  # 浏览器运行模式
+  # true:  无头(默认,适合批量采集,无窗口干扰)
+  # false: 有头(可视化,便于观察截图过程、排查问题)
+  # 注意:运行 webapp-testing Skill 时,Agent 会询问用户选择,并覆盖此处的值。
+  #       若希望 Agent 不再询问,请显式设置该字段(如 headless: false)。
+  headless: true
+  # 慢动作调试(毫秒)。配合 headless: false 使用,放慢每个操作便于排查。
+  # 设为 0 表示不启用。
+  slow_mo: 0
+  # 是否在运行 webapp-testing 时询问用户选择浏览器模式。
+  # true(默认):Agent 在 Step 1.5 用 AskUserQuestion 询问(补拍/命令行已指定时仍会跳过)
+  # false:不询问,直接使用上面的 headless 值
+  interactive: true
+  # 截图后根据 screenshots.yaml 的 highlight 字段自动绘制编号、箭头和标签。
+  auto_annotate: true
+  # 当前支持 numbered_arrow（编号气泡 + 箭头 + 标签）。
+  annotation_style: "numbered_arrow"
+  # 保留纯页面原图到 output/screenshots/original/{id}.png。
+  keep_original: true
+  # 标注框、编号气泡和箭头颜色（#RRGGBB）。
+  annotation_color: "#E53935"
+  # 是否在每张截图顶部拼接伪造的浏览器头(含真实 URL + 标签标题)。
+  # false(默认):纯页面截图,适合大多数技术手册
+  # true:截图后用 Pillow 合成浏览器头部,适合产品演示/需要展示访问路径的文档
+  # 注意:运行 webapp-testing Skill 时,Agent 会在所有截图采集完成后再次询问用户
+  #       (Step 4.5),用户选择会覆盖此处的值。需要 Pillow: pip install pillow
+  add_browser_chrome: false
+  # 浏览器头部模板图片路径(开启 add_browser_chrome 时必需)。
+  # 请自行截取目标浏览器的顶部区域(标签栏 + 地址栏 + 工具栏),保存为 PNG。
+  # 建议宽度与截图视口一致(如 1920),以减少缩放失真。
+  # 示例: templates/browser_chrome_header.png 或 knowledge/browser_chrome_header.png
+  browser_chrome_header_path: "templates/browser_chrome_header.png"
+  # 地址栏区域 [x1, y1, x2, y2],取值为相对于头部图片宽高的比例(0~1)。
+  # 脚本会在此区域内绘制真实 URL 文字。需要根据你的头部图片实际地址栏位置调整。
+  # 示例(Chrome 风格,头部高度约 130px,地址栏居中偏下):
+  #   x1=0.26, y1=0.50, x2=0.93, y2=0.72
+  # 留空或注释则不绘制 URL(仅拼接头部图片)。
+  browser_chrome_addr_rect: [0.0974, 0.6139, 0.9286, 0.8501]
   # 截图模式: viewport(仅可视区域) / full_page(整页)
   default_mode: "viewport"    # 当前不支持:脚本通过每张截图的 full_page 字段控制
   # 页面加载超时(毫秒)
@@ -33,14 +72,14 @@ apps:
 test_accounts:
   admin:
     username: "admin"
-    password: "admin123"
+    password: "${APP_ADMIN_PASS}"
     login_url: "/login"
     expected_redirect: "/dashboard"  # 当前不支持:脚本用 URL 是否含 "login" 判断登录状态
     app: "admin"              # 该账号登录哪套前端(单前端项目可省略)
   
   user:
     username: "testuser"
-    password: "test123"
+    password: "${APP_USER_PASS}"
     login_url: "/login"
     expected_redirect: "/home"       # 当前不支持:脚本用 URL 是否含 "login" 判断登录状态
     app: "client"             # 该账号登录哪套前端

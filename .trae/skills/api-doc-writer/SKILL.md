@@ -5,15 +5,36 @@ description: "API接口文档生成器。读取 PKB 中的 apis.yaml,按照标�
 
 # API Doc Writer —— API 接口文档生成器
 
-你的任务是读取 PKB(`knowledge/apis.yaml`)并生成一份完整的 API 接口文档。
+## Skill 契约
+
+```yaml
+inputs:
+  - knowledge/apis/
+  - knowledge/project.yaml
+  - knowledge/roles/
+outputs:
+  - output/api-doc.md
+depends_on:
+  - api-extractor
+  - diagram-generator (需要时序图)
+cache_key:
+  - knowledge/apis/**/*.yaml
+  - knowledge/roles/**/*.yaml
+stage: writer
+```
+
+你的任务是读取 PKB(`knowledge/apis/`)并生成一份完整的 API 接口文档。
 
 ## 输入
 
-- `knowledge/apis.yaml` —— 接口端点、请求/响应结构
+- `knowledge/apis/` —— API PKB(分文件:`_meta.yaml` + 每个分组一个 yaml)
+  - 向后兼容:如目录不存在,读取 `knowledge/apis.yaml`
 - `knowledge/project.yaml` —— 项目基本信息
-- `knowledge/roles.yaml` —— 角色信息(用于接口权限说明)
+- `knowledge/roles/` —— 角色信息(分文件,用于接口权限说明)
+  - 向后兼容:如目录不存在,读取 `knowledge/roles.yaml`
 - 大纲模板:`templates/api-doc-outline.md`
-- `output/diagrams/manifest.yaml` —— 图表清单(可选。若存在,在接口分组中嵌入时序图 sequence-*.png)
+
+> **PKB 版本检查:** 读取 `knowledge/project.yaml` 时,如 `schema_version` 不在支持范围(`["1.0"]`),输出警告并提示用户升级 Skill。
 
 ## 输出
 

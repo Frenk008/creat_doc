@@ -18,6 +18,7 @@ PlantUML 图表生成脚本
 """
 
 import argparse
+import logging
 import os
 import sys
 import urllib.request
@@ -30,6 +31,16 @@ PLANTUML_SERVERS = [
     "https://www.plantuml.com/plantuml",
     "https://plantuml.com/plantuml",
 ]
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s %(message)s",
+)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
 
 # PlantUML 使用的特殊编码字符表
 PLANTUML_ENCODE_DICT = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
@@ -104,8 +115,10 @@ def render_png(plantuml_code: str, servers=None) -> bytes:
 def save_png(png_data: bytes, output_path: str):
     """保存 PNG 数据到文件"""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as f:
+    tmp_path = output_path + ".tmp"
+    with open(tmp_path, "wb") as f:
         f.write(png_data)
+    os.replace(tmp_path, output_path)
 
 
 def create_docx(plantuml_code: str, png_data: bytes, request_text: str, output_path: str):
@@ -123,7 +136,7 @@ def create_docx(plantuml_code: str, png_data: bytes, request_text: str, output_p
         # python-docx 未安装,退化为只保存 PNG
         png_path = output_path.rsplit(".", 1)[0] + ".png"
         save_png(png_data, png_path)
-        print(f"python-docx 未安装,已保存 PNG: {png_path}")
+        logging.warning(f"python-docx 未安装,已保存 PNG: {png_path}")
         return
 
     import io
@@ -155,7 +168,9 @@ def create_docx(plantuml_code: str, png_data: bytes, request_text: str, output_p
     doc.add_picture(image_stream, width=Inches(6))
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    doc.save(output_path)
+    tmp_path = output_path + ".tmp"
+    doc.save(tmp_path)
+    os.replace(tmp_path, output_path)
 
 
 def open_editor(plantuml_code: str):
@@ -208,7 +223,7 @@ def main():
     if args.code.startswith("@"):
         code_file = args.code[1:]
         if not os.path.exists(code_file):
-            print(f"错误: 文件不存在: {code_file}", file=sys.stderr)
+            logging.error(f"错误: 文件不存在: {code_file}")
             sys.exit(1)
         with open(code_file, "r", encoding="utf-8") as f:
             plantuml_code = f.read()
@@ -222,27 +237,35 @@ def main():
     # 配置服务器
     servers = [args.server] if args.server else PLANTUML_SERVERS
 
-    print("正在渲染 PlantUML 图表...")
+    # 公网服务器数据外发警告
+    public_servers = {"https://www.plantuml.com/plantuml", "https://plantuml.com/plantuml"}
+    if any(s in public_servers for s in servers):
+        logging.warning(
+            "⚠️ 安全提示:图表内容将通过公网发送到 PlantUML 服务器(含表名/API路径等)。\n"
+            "   敏感项目请使用 --server http://localhost:8080 指定本地实例。",
+        )
+
+    logging.info("正在渲染 PlantUML 图表...")
     try:
         png_data = render_png(plantuml_code, servers)
     except RuntimeError as e:
-        print(f"渲染失败: {e}", file=sys.stderr)
+        logging.error(f"渲染失败: {e}")
         sys.exit(1)
 
     # 根据格式输出
     if args.format == "png" or args.output.endswith(".png"):
         save_png(png_data, args.output)
-        print(f"PNG 已保存: {args.output}")
+        logging.info(f"PNG 已保存: {args.output}")
     else:
         create_docx(plantuml_code, png_data, args.request, args.output)
-        print(f"DOCX 已保存: {args.output}")
+        logging.info(f"DOCX 已保存: {args.output}")
 
     # 打开浏览器
     if not args.no_browser:
         url = open_editor(plantuml_code)
-        print(f"在线编辑器已打开: {url}")
+        logging.info(f"在线编辑器已打开: {url}")
 
-    print("完成!")
+    logging.info("完成!")
 
 
 if __name__ == "__main__":

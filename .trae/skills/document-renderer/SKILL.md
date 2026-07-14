@@ -5,7 +5,29 @@ description: "文档渲染器。将审核后的 Markdown 文档渲染为 DOCX/PD
 
 # Document Renderer —— 文档渲染器
 
-你的任务是将 Markdown 文档渲染为可直接交付的 DOCX(或 PDF/HTML)文档。
+## Skill 契约
+
+```yaml
+inputs:
+  - output/manual.md (如存在)
+  - output/database-spec.md (如存在)
+  - output/api-doc.md (如存在)
+  - output/screenshots/ (如存在,嵌入截图)
+outputs:
+  - output/用户使用手册.docx
+  - output/数据库设计说明书.docx (如存在输入)
+  - output/API接口文档.docx (如存在输入)
+depends_on: []  # doc-gen 按文档类型注入 writer/reviewer 依赖
+cache_key:
+  - output/manual.md
+  - output/database-spec.md
+  - output/api-doc.md
+  - knowledge/screenshots.yaml
+  - output/screenshots/*.png
+stage: render
+```
+
+你的任务是将 Markdown 文档渲染为可直接交付的 DOCX(或 PDF/HTML)文档。渲染手册前必须先运行 `scripts/prepare_markdown.py`，把已采集截图嵌入渲染副本；不得覆盖审核后的 `output/manual.md`。
 
 ## 输入
 
@@ -18,12 +40,24 @@ description: "文档渲染器。将审核后的 Markdown 文档渲染为 DOCX/PD
 
 ## 渲染方案
 
+### Step 0: 解析截图占位
+
+```bash
+python .trae/skills/document-renderer/scripts/prepare_markdown.py \
+  --input output/manual.md \
+  --plan knowledge/screenshots.yaml \
+  --screenshots output/screenshots \
+  --output output/manual.render.md
+```
+
+后续手册渲染统一读取 `output/manual.render.md`。数据库/API 文档不执行此步骤。
+
 ### 方案 A: Pandoc (首选)
 
 检查系统是否安装 pandoc,如已安装则使用:
 
 ```bash
-pandoc output/manual.md \
+pandoc output/manual.render.md \
   -o output/用户使用手册.docx \
   --reference-doc=templates/reference.docx \
   --toc \
@@ -65,11 +99,14 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 doc = Document()
 
-# 设置默认字体
+# 设置默认字体(黑体,中文+西文统一)
 style = doc.styles['Normal']
 font = style.font
-font.name = 'SimSun'
+font.name = 'SimHei'
 font.size = Pt(12)
+# 中文东亚字体也需要设置
+from docx.oxml.ns import qn
+style.element.rPr.rFonts.set(qn('w:eastAsia'), '黑体')
 
 # 封面
 # 标题页
@@ -120,7 +157,7 @@ p.style = doc.styles['Normal']
 如以上方案均不可用,先转为 HTML 再用 Word 打开:
 
 ```bash
-pandoc output/manual.md -o output/manual.html --standalone --toc
+pandoc output/manual.render.md -o output/manual.html --standalone --toc
 ```
 
 然后提示用户用 Word 打开 HTML 并另存为 DOCX。
@@ -129,7 +166,7 @@ pandoc output/manual.md -o output/manual.html --standalone --toc
 
 - **方案 D: Pandoc + LaTeX**
   ```bash
-  pandoc output/manual.md -o output/用户使用手册.pdf \
+  pandoc output/manual.render.md -o output/用户使用手册.pdf \
     --pdf-engine=xelatex \
     -V CJKmainfont="Microsoft YaHei" \
     --toc --toc-depth=3 --number-sections
@@ -143,15 +180,15 @@ pandoc output/manual.md -o output/manual.html --standalone --toc
   需要 LibreOffice。
 - **若 LaTeX 和 LibreOffice 均不可用**: 回退为 HTML 输出,提示用户"PDF 引擎不可用,已输出 HTML"
 
-## 图片占位渲染
+## 图片渲染与缺图兜底
 
-手册中的图片占位标记需要特殊渲染:
+预处理脚本会把存在对应截图的占位标记替换成 Markdown 图片。只有截图状态不可用或文件不存在时，才保留以下占位标记:
 
 ```
 【图片：创建用户-步骤3】（截图占位，后续补充）
 ```
 
-渲染为 DOCX 中的**灰底占位框**:
+剩余占位标记渲染为 DOCX 中的**灰底占位框**。python-docx 方案遇到标准 Markdown 图片语法时必须调用 `doc.add_picture`，不得将其作为普通文本。
 
 ```
 ┌──────────────────────────────────────────┐
@@ -203,7 +240,7 @@ run2._r.append(instrText)
 
 | 元素 | 样式 |
 |------|------|
-| 正文字体 | 宋体(SimSun),12pt |
+| 正文字体 | 黑体(SimHei),12pt |
 | 标题字体 | 黑体(SimHei) |
 | 一级标题 | 18pt,加粗 |
 | 二级标题 | 16pt,加粗 |
@@ -291,6 +328,40 @@ pathlib.Path("output/manual.md").write_text(
 | 去尾部空行 | 每个分片 `rstrip()` 后再拼接,避免多余空行 |
 | 行尾符 | 统一使用 `\n`(LF),不用 `\r\n`(CRLF) |
 | 最终校验 | 合并后检查文件开头无 `\ufeff`,文件中间无 `\ufeff` |
+
+### 原子写入(避免中途失败损坏文件)
+
+所有写入 PKB/输出文件的脚本 SHALL 采用"写临时文件 → rename"模式:
+
+**Python 实现示例:**
+```python
+import os
+import tempfile
+
+def atomic_write(path: str, content: str, encoding: str = "utf-8"):
+    """
+    原子写入:先写临时文件,成功后 rename 覆盖目标文件。
+    中途失败(磁盘满/权限/中断)不会破坏原文件。
+    """
+    dir_path = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="\n") as f:
+            f.write(content)
+        os.replace(tmp_path, path)  # 原子操作
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+```
+
+**适用范围:**
+- generate_screenshots.py 写 screenshots.yaml
+- generate.py 写 PNG/DOCX
+- document-renderer 写 DOCX
+- 任何"先读 → 改 → 写回"的文件操作
 
 ### 快速校验脚本
 

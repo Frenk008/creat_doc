@@ -5,6 +5,24 @@ description: "截图质量审核器(V2)。检查webapp-testing采集的截图是
 
 # Screenshot Reviewer —— 截图质量审核器(V2)
 
+## Skill 契约
+
+```yaml
+inputs:
+  - output/capture-result.json
+  - knowledge/screenshots.yaml
+  - output/screenshots/
+outputs:
+  - output/screenshot-review-report.md
+  - output/retake-list.yaml (如有不合格)
+  - knowledge/screenshots.yaml (更新 status)
+depends_on:
+  - webapp-testing
+cache_key:
+  - output/capture-result.json
+stage: screenshot
+```
+
 你的任务是检查 webapp-testing 采集的截图质量,发现不合格截图后生成补拍清单,触发重新采集。
 
 ## 前置条件
@@ -51,7 +69,14 @@ failed    → 直接进入补拍清单
 | 内容非空 | 不是全白/全灰/Loading 页 | 加入补拍清单 |
 | 无遮挡 | 关键区域无弹窗/Loading 遮挡 | 标记 warning |
 | 高亮可见 | highlight 元素在截图中可见 | 标记 warning |
+| 自动标注完整性 | `annotation.matched` 等于 `annotation.requested` | 读取 `annotation_warnings` 并标记 warning，必要时建议补拍 |
+| 前置动作完整性 | `action_warnings` 为空 | 动作失败的截图不得审核为通过，加入补拍清单 |
+| 状态匹配 | 截图呈现 `state_type/state_name` 描述的页面、弹窗、确认框或结果状态 | 状态不符加入补拍清单 |
+| 选择器可执行 | `selector_status` 不为 unresolved | unresolved 直接进入补拍/人工确认 |
 | 无错误页 | 不是 404/500/空白错误页 | 加入补拍清单 |
+| 敏感信息检查 | 截图中不含明文密码/身份证号/银行卡号/手机号 | 加入补拍清单(脱敏后重拍) |
+
+自动标注目标未命中本身不改变 `captured` 状态。审核报告必须列出对应警告；仅当缺少标注会导致操作指引不可理解时，才加入补拍清单。
 
 **程序化检查(Python 脚本辅助):**
 
@@ -177,6 +202,7 @@ webapp-testing 读取 retake-list.yaml → 只补拍不合格的截图 → 覆�
 - 每轮只补拍上一轮失败的截图
 - 补拍后重新进入审核流程
 - 2 轮后仍失败的截图,在手册中保留占位标记
+- **浏览器模式沿用**:补拍默认复用 `screenshot-config.yaml` 中已存储的 `headless`/`slow_mo`,**不再询问用户**(参见 webapp-testing Step 1.5 条件3)。如需切换模式,用户可在 config 中手动修改,或 Agent 按需在命令行追加 `--headed`。
 
 ### Step 7: 更新截图状态
 
@@ -211,4 +237,5 @@ webapp-testing 读取 retake-list.yaml → 只补拍不合格的截图 → 覆�
 1. **不改截图文件**:审核只检查和标记,不修改已采集的截图文件。
 2. **补拍上限**:最多 2 轮补拍,避免无限循环。
 3. **失败不阻塞**:个别截图审核失败不影响整体文档生成,只是该图保留占位。
+4. **状态独立性**:补拍单张截图时仍必须从 route 起点完整重放成功；不得依赖上一张截图遗留的弹窗或表单状态。
 4. **资源清理**:使用 MCP 工具检查时,完成后关闭页面。

@@ -5,6 +5,27 @@ description: "PKB驱动的UML图表生成器。读取PKB知识库自动生成ER�
 
 # Diagram Generator —— UML 图表生成器
 
+## Skill 契约
+
+```yaml
+inputs:
+  - knowledge/database/ (database/all 时)
+  - knowledge/apis/ (api/all 时)
+  - knowledge/workflows/
+  - knowledge/modules/
+outputs:
+  - output/diagrams/*.png
+  - output/diagrams/manifest.yaml
+depends_on:
+  - project-explorer
+cache_key:
+  - knowledge/database/**/*.yaml
+  - knowledge/apis/**/*.yaml
+  - knowledge/workflows/**/*.yaml
+  - knowledge/modules/**/*.yaml
+stage: diagram
+```
+
 你的任务是读取 PKB 知识库(或自然语言描述),生成 PlantUML 代码并渲染为 PNG 图片,供各类文档嵌入。
 
 ## 两种工作模式
@@ -29,6 +50,23 @@ description: "PKB驱动的UML图表生成器。读取PKB知识库自动生成ER�
 
 ## 执行流程(模式 A: PKB 驱动)
 
+**安全提示(数据外发风险):**
+
+公网 PlantUML 服务器(`plantuml.com`)会接收完整的图表内容,包括:
+- 数据库表名、字段名、关系
+- API 路径、请求/响应结构
+- 业务流程中的操作步骤
+
+**敏感项目应使用本地 PlantUML 服务器:**
+```bash
+# 启动本地 PlantUML server(需要 Java)
+java -jar plantuml.jar -picoweb:8080
+# 或使用 Docker
+docker run -d -p 8080:8080 plantuml/plantuml-server
+```
+
+然后在调用时指定:`--server http://localhost:8080`
+
 ### Step 1: 确定需要生成的图表
 
 根据 `--type` 参数和 PKB 内容,确定图表清单:
@@ -50,9 +88,9 @@ description: "PKB驱动的UML图表生成器。读取PKB知识库自动生成ER�
 
 ### Step 2: 读取 PKB 并生成 PlantUML 代码
 
-#### 图表 1: ER 图(从 database.yaml 生成)
+#### 图表 1: ER 图(从 database/ 分文件生成)
 
-读取 `knowledge/database.yaml`,生成实体关系图:
+读取 `knowledge/database/_meta.yaml` 和各表文件，生成实体关系图；目录不存在时才回退读取旧版 `knowledge/database.yaml`:
 
 ```plantuml
 @startuml
@@ -321,6 +359,22 @@ PNG 下载失败时,脚本自动用备用服务器重试。仍失败则:
 1. 检查 PlantUML 代码语法是否正确
 2. 尝试简化图表
 3. 用户可复制代码手动粘贴到 https://www.plantuml.com/plantuml/uml/
+
+**本地 PlantUML 服务器支持:**
+
+如项目数据敏感,不支持外发到公网,可部署本地 PlantUML 服务器并通过以下方式指定:
+- 命令行:`--server http://localhost:8080`
+- 或修改脚本中的 `PLANTUML_SERVERS` 常量
+
+本地部署方式见上方"安全提示"段落。
+
+## 日志规范
+
+生成的脚本 SHALL 统一使用 Python `logging` 模块替代 `print`:
+- `logging.info()` —— 正常流程信息
+- `logging.warning()` —— 可恢复的异常或需要注意的情况
+- `logging.error()` —— 错误信息(输出到 stderr)
+- Windows 下 SHALL 配置 `sys.stdout.reconfigure(encoding="utf-8")` 避免中文乱码
 
 ## 严格约束(PKB 驱动模式)
 

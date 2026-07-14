@@ -1,2 +1,20 @@
 2026-06-22_17-40-18_一、为什么数组比 HashMap 更快？.md
 用户使用手册.docx
+
+# 敏感配置和环境相关运行时数据
+knowledge/screenshot-config.yaml
+knowledge/runtime/
+
+# 可重新生成的缓存与采集产物
+.cache/
+output/screenshots/
+output/playwright/
+output/diagrams/temp/
+output/*.render.md
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# Office 临时文件
+~$*.docx

@@ -5,6 +5,23 @@ description: "运行时探索器(V2)。通过chrome-devtools-mcp连接已启动�
 
 # Runtime Explorer —— 运行时探索器(V2)
 
+## Skill 契约
+
+```yaml
+inputs:
+  - knowledge/screenshot-config.yaml
+  - knowledge/pages/
+  - knowledge/modules/
+outputs:
+  - knowledge/runtime/
+depends_on:
+  - project-explorer
+cache_key:
+  - knowledge/pages/**/*.yaml
+  - knowledge/modules/**/*.yaml
+stage: runtime
+```
+
 你的任务是通过 chrome-devtools-mcp 连接到已运行的目标项目,自动探索页面的动态行为,补充静态分析无法发现的信息,并更新 PKB。
 
 ## 前置条件
@@ -16,14 +33,14 @@ description: "运行时探索器(V2)。通过chrome-devtools-mcp连接已启动�
 ## 输入
 
 - `knowledge/screenshot-config.yaml` —— 含 base_url 和 test_accounts
-- `knowledge/pages.yaml` —— 静态分析得到的页面列表
-- `knowledge/modules.yaml` —— 模块信息
+- `knowledge/pages/` —— 静态分析得到的页面文件目录
+- `knowledge/modules/` —— 模块文件目录
 
 ## 输出
 
-- `knowledge/runtime.yaml` —— 运行时发现(弹窗、表单、校验规则等)
-- 更新 `knowledge/pages.yaml` —— 补充动态发现的 actions 和 fields
-- 更新 `knowledge/workflows.yaml` —— 补充动态发现的操作步骤
+- `knowledge/runtime/` —— 运行时发现(`_meta.yaml`、`dialogs.yaml`、`validation.yaml`)
+- 更新对应的 `knowledge/pages/{page_id}.yaml` —— 补充动态发现的 actions 和 fields
+- 更新对应的 `knowledge/workflows/{workflow_id}.yaml` —— 补充动态发现的操作步骤
 
 ## 为什么用 chrome-devtools-mcp 而不是 Playwright
 
@@ -43,13 +60,15 @@ runtime-explorer 的核心是**探索**,不是按计划执行:
 每发现一个静态分析遗漏的信息,就更新 PKB。
 ```
 
+发现弹窗、抽屉、下拉框、确认框和结果提示时，必须记录触发动作的稳定 selector、目标状态 selector、`ui_effect` 与建议 `capture`。Screenshot Planner 将用这些信息构建从 route 起点可独立重放的动作序列。
+
 ### 探索深度控制
 
 为避免无限探索,设置明确的边界:
 
 | 探索内容 | 深度 | 说明 |
 |---------|------|------|
-| 页面级 | 所有 pages.yaml 中的页面 | 每页都打开看一眼 |
+| 页面级 | pages/ 中的所有页面文件 | 每页都打开看一眼 |
 | 弹窗级 | 点击主操作按钮(新增/编辑) | 只探索主要弹窗,不探索每个下拉 |
 | 表单级 | 弹窗中的所有输入框 | 记录字段和校验规则 |
 | 交互级 | 不深入(不执行实际增删改) | 只看不动数据 |
@@ -58,7 +77,7 @@ runtime-explorer 的核心是**探索**,不是按计划执行:
 
 ### Step 1: 读取 PKB 和配置
 
-读取 `pages.yaml` 获取页面列表,读取 `screenshot-config.yaml` 获取 base_url 和测试账号。
+读取 `pages/*.yaml` 获取页面列表,读取 `screenshot-config.yaml` 获取 base_url 和测试账号。
 
 ### Step 2: 登录系统
 
@@ -86,7 +105,7 @@ wait_for(text="首页", timeout=10000)  # 等待首页加载
 
 ### Step 3: 逐页探索
 
-对 `pages.yaml` 中的每个页面:
+对 `pages/*.yaml` 中的每个页面:
 
 #### 3.1 打开页面
 
@@ -198,16 +217,16 @@ click(selector="button:has-text('取消')")  # 或 press_key(key="Escape")
 
 确保页面恢复到初始状态,再继续探索下一个。
 
-### Step 5: 生成 runtime.yaml
+### Step 5: 生成 runtime/ 结果
 
-将所有发现写入 `knowledge/runtime.yaml`:
+将发现按类别写入 `knowledge/runtime/`，并用 `_meta.yaml` 记录探索状态:
 
 ```yaml
 runtime:
   status: "complete"            # not_explored / partial / complete / timeout / auth_failed / failed
   explored_at: "{时间}"
   explored_pages: ["login", "user-list", "user-create", "role-list"]
-  total_pages: 15               # pages.yaml 中的页面总数
+  total_pages: 15               # pages/ 中的页面总数
   explored_count: 4             # 实际探索的页面数
 
   discovered_dialogs:
@@ -261,11 +280,11 @@ runtime:
 
 将运行时发现回写到 PKB 文件:
 
-**更新 pages.yaml:**
+**更新对应 pages/{page_id}.yaml:**
 - 将 `discovered_fields` 合并到 page.fields
 - 将弹窗中的操作补充到 page.actions
 
-**更新 workflows.yaml:**
+**更新对应 workflows/{workflow_id}.yaml:**
 - 将弹窗中的表单字段补充到 workflow steps
 - 将校验规则补充到 steps 的 notes
 
@@ -273,7 +292,7 @@ runtime:
 
 ### 分页探索
 
-如果 pages.yaml 有很多页面(>10 个),分批探索:
+如果 pages/ 有很多页面(>10 个),分批探索:
 
 ```
 第1批: 登录页 + 首页 + 前3个核心模块页面
@@ -312,4 +331,4 @@ runtime:
 1. **不修改数据**:不执行实际的增删改操作,只点击"新增/编辑"看弹窗,然后取消关闭。
 2. **不提交表单**:提交空表单仅为触发校验提示,不填写真实数据后提交。
 3. **每次探索后恢复**:弹窗探索完毕后必须关闭弹窗,不残留弹窗状态。
-4. **发现即记录**:任何静态分析没有的信息都要记录到 runtime.yaml。
+4. **发现即记录**:任何静态分析没有的信息都要记录到 runtime/ 对应文件。

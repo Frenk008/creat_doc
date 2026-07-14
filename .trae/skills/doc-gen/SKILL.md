@@ -1,261 +1,480 @@
 ---
 name: "doc-gen"
-description: "自动化软件文档生成编排器。协调多个子 Skill 完成从源码分析到多种文档(DOCX/PDF)的完整流水线,支持用户手册、数据库说明书、API文档。当用户需要根据项目源码自动生成各类文档时调用。"
+description: "自动化软件文档生成编排器。读取各 Skill 的契约(inputs/outputs/depends_on/cache_key/stage),动态决定执行顺序、缓存跳过、分段执行。支持用户手册、数据库说明书、API文档。当用户需要根据项目源码自动生成各类文档时调用。"
 ---
 
-# Doc Gen —— 文档生成编排器
+# Doc Gen —— 契约驱动编排器
 
-你是文档生成系统的核心调度器。你的职责是协调以下子 Skill,完成从源码到多种文档的完整链路。
+你是文档生成系统的核心调度器。你通过读取各 Skill 的契约声明,动态决定执行顺序、缓存跳过、分段执行。
 
-## 支持的文档类型
-
-| 类型 | 参数 | 调用的 Writer | 输出文件 | PKB 依赖 |
-|------|------|--------------|----------|----------|
-| 用户手册 | `--type manual`(默认) | manual-writer | 用户使用手册.docx | modules, pages, roles, workflows |
-| 数据库说明书 | `--type database` | database-spec-writer | 数据库设计说明书.docx | database.yaml |
-| API 文档 | `--type api` | api-doc-writer | API接口文档.docx | apis.yaml |
-| 全部 | `--type all` | 以上全部 | 3份文档 | 全部 |
-
-## 系统架构
+## 编排原理
 
 ```
-用户调用 doc-gen --type <文档类型>
-       │
-       ▼
-┌─ 阶段1: 静态分析(只跑一次)(=Step 1) ──────────┐
-│  project-explorer  (扫描源码 → 完整 PKB)      │
-└──────────────────────────────────────────────┘
-       │
-       ▼ (PKB = knowledge/ 目录下所有 YAML)
-┌─ 阶段1.5: 运行时探索(仅 --deep, manual/all)(=Step 2) ┐
-│  (用户需已自行启动项目)                        │
-│  runtime-explorer(chrome-devtools-mcp 探索)   │
-│  → 回写补全 PKB,再进入 writers                │
-│  (未传 --deep 则整阶段跳过)                    │
-└──────────────────────────────────────────────┘
-       │
-       ▼
-┌─ 阶段2: 图表生成(按类型生成UML图)(=Step 2.5) ─────┐
-│  diagram-generator                             │
-│  --type database → ER图                         │
-│  --type api → 时序图                            │
-│  --type manual → 流程图+功能总览图               │
-│  --type all → 以上全部                          │
-│  产出: output/diagrams/*.png + manifest.yaml   │
-└──────────────────────────────────────────────┘
-       │
-       ▼
-┌─ 阶段3: 文档生成(按类型调度)(=Step 3) ──────────┐
-│  --type manual:                              │
-│    manual-writer + screenshot-planner        │
-│  --type database:                            │
-│    database-spec-writer                      │
-│  --type api:                                 │
-│    api-doc-writer                            │
-│  --type all:                                 │
-│    以上全部并行生成                            │
-│  (writers 读取 manifest.yaml 引用图表)          │
-└──────────────────────────────────────────────┘
-       │
-       ▼
-┌─ 阶段4: 质量审核(=Step 3,QA 在 Step 3 内) ─────────┐
-│  qa-reviewer (用户手册) / 直接通过(技术文档)   │
-└───────────────────────────────────────────┘
-       │
-       ▼
-┌─ 阶段5: 截图采集 (仅 manual, V1跳过)(=Step 4) ──────┐
-│  webapp-testing + screenshot-reviewer         │
-└──────────────────────────────────────────────┘
-       │
-       ▼
-┌─ 阶段6: 文档渲染(=Step 5) ──────────────────────┐
-│  document-renderer (Markdown → DOCX/PDF)      │
-│  (嵌入 diagrams/*.png)                        │
-└───────────────────────────────────────────┘
+1. 收集所有 Skill 的契约(从各 SKILL.md 的 "## Skill 契约" 段落)
+2. 根据 --type 和 --stage 过滤要执行的 Skill
+3. 检查 cache_key 文件哈希,跳过未变更的 Skill
+4. 按 depends_on 拓扑排序,无依赖关系的并行执行
+5. 逐阶段推进
 ```
+
+## Skill 契约注册表
+
+以下是所有 Skill 的契约汇总(编排依据):
+
+### explorer 阶段
+```yaml
+project-explorer:
+  inputs: [项目源码目录]
+  outputs: [knowledge/project.yaml, knowledge/modules/, knowledge/pages/, knowledge/roles/, knowledge/workflows/, knowledge/workflow-chains.yaml]
+  depends_on: []
+  cache_key: [源码文件哈希]
+  stage: explorer
+
+database-extractor:
+  inputs: [项目源码(数据库相关文件), knowledge/project.yaml]
+  outputs: [knowledge/database/]
+  depends_on: [project-explorer]
+  cache_key: [源码中的数据库文件(**/*.sql, **/entity/*.java, **/model/*.go)]
+  stage: explorer
+
+api-extractor:
+  inputs: [项目源码(接口相关文件), knowledge/project.yaml, knowledge/roles/]
+  outputs: [knowledge/apis/]
+  depends_on: [project-explorer]
+  cache_key: [源码中的接口文件(**/*Controller.java, **/*handler.go, **/swagger.json)]
+  stage: explorer
+```
+
+### runtime 阶段(仅 --deep)
+```yaml
+runtime-explorer:
+  inputs: [knowledge/screenshot-config.yaml, knowledge/pages/, knowledge/modules/]
+  outputs: [knowledge/runtime/]
+  depends_on: [project-explorer]
+  cache_key: [knowledge/pages/**/*.yaml, knowledge/modules/**/*.yaml]
+  stage: runtime
+```
+
+### diagram 阶段
+```yaml
+diagram-generator:
+  inputs: [knowledge/database/, knowledge/apis/, knowledge/workflows/, knowledge/modules/]
+  outputs: [output/diagrams/*.png, output/diagrams/manifest.yaml]
+  depends_on: [project-explorer]
+  cache_key: [knowledge/database/**/*.yaml, knowledge/apis/**/*.yaml, knowledge/workflows/**/*.yaml, knowledge/modules/**/*.yaml]
+  stage: diagram
+```
+
+### writer 阶段(按 --type 选择)
+```yaml
+manual-writer:
+  inputs: [knowledge/project.yaml, knowledge/modules/, knowledge/pages/, knowledge/roles/, knowledge/workflows/, output/diagrams/manifest.yaml]
+  outputs: [output/manual.md]
+  depends_on: [project-explorer, diagram-generator]
+  cache_key: [knowledge/modules/**/*.yaml, knowledge/pages/**/*.yaml, knowledge/roles/**/*.yaml, knowledge/workflows/**/*.yaml, knowledge/workflow-chains.yaml]
+  stage: writer
+
+database-spec-writer:
+  inputs: [knowledge/database/, output/diagrams/manifest.yaml]
+  outputs: [output/database-spec.md]
+  depends_on: [database-extractor, diagram-generator]
+  cache_key: [knowledge/database/**/*.yaml]
+  stage: writer
+
+api-doc-writer:
+  inputs: [knowledge/apis/, knowledge/roles/, output/diagrams/manifest.yaml]
+  outputs: [output/api-doc.md]
+  depends_on: [api-extractor, diagram-generator]
+  cache_key: [knowledge/apis/**/*.yaml, knowledge/roles/**/*.yaml]
+  stage: writer
+```
+
+### review 阶段
+```yaml
+qa-reviewer:
+  inputs: [output/manual.md, knowledge/]
+  outputs: [output/manual.md, output/qa-report.md, output/visual-coverage-report.json]
+  depends_on: [manual-writer]
+  cache_key: [output/manual.md]
+  stage: review
+```
+
+### screenshot 阶段(仅 manual/all)
+```yaml
+screenshot-planner:
+  inputs: [output/manual.md, output/visual-coverage-report.json, knowledge/pages/, knowledge/workflows/, knowledge/roles/, knowledge/runtime/ (如存在)]
+  outputs: [knowledge/screenshots.yaml]
+  depends_on: [qa-reviewer]
+  cache_key: [output/manual.md, output/visual-coverage-report.json, knowledge/pages/**/*.yaml, knowledge/workflows/**/*.yaml, knowledge/runtime/**/*.yaml]
+  stage: screenshot
+
+webapp-testing:
+  inputs: [knowledge/screenshots.yaml, knowledge/screenshot-config.yaml]
+  outputs: [output/screenshots/*.png, output/capture-result.json]
+  depends_on: [screenshot-planner]
+  cache_key: [knowledge/screenshots.yaml]
+  stage: screenshot
+
+screenshot-reviewer:
+  inputs: [output/capture-result.json, output/screenshots/]
+  outputs: [output/screenshot-review-report.md, output/retake-list.yaml]
+  depends_on: [webapp-testing]
+  cache_key: [output/capture-result.json]
+  stage: screenshot
+```
+
+### render 阶段
+```yaml
+document-renderer:
+  inputs: [output/manual.md, output/database-spec.md, output/api-doc.md, output/screenshots/]
+  outputs: [output/用户使用手册.docx, output/数据库设计说明书.docx, output/API接口文档.docx]
+  depends_on: []  # 由下方类型化依赖表注入
+  cache_key: [output/manual.md, output/database-spec.md, output/api-doc.md, knowledge/screenshots.yaml, output/screenshots/**/*.png]
+  stage: render
+```
+
+## 阶段依赖图
+
+```
+explorer ┌─ project-explorer ──┬── database-extractor ──────────────────────────┐
+         │                     ├── api-extractor ───────────────────────────────┤
+         │                     │                                                  │
+         │              runtime-explorer (仅 --deep)                              │
+         │                     │                                                  │
+         │                     ▼                                                  │
+         │              diagram-generator ──┬── manual-writer ──→ qa-reviewer ──┤
+         │                                  ├── database-spec-writer ───────────┤
+         │                                  └── api-doc-writer ─────────────────┤
+         │                                                                     ▼
+         └── manual-writer ──→ screenshot-planner ──→ webapp-testing           │
+                                                   ──→ screenshot-reviewer      │
+         │                                                                     │
+         └─────────────────────────────────────────────────────────────────────┴──→ render
+```
+
+**--type 决定哪些 Extractor 执行:**
+
+| --type | project-explorer | database-extractor | api-extractor |
+|--------|-----------------|-------------------|---------------|
+| manual | ✅ | ❌ | ❌ |
+| database | ✅ | ✅ | ❌ |
+| api | ✅ | ❌ | ✅ |
+| all | ✅ | ✅ | ✅ |
+
+**类型化依赖(覆盖注册表中无法表达的条件依赖):**
+
+| --type | diagram-generator 额外依赖 | document-renderer 依赖 |
+|--------|----------------------------|------------------------|
+| manual | project-explorer | screenshot-reviewer |
+| database | database-extractor | database-spec-writer |
+| api | api-extractor | api-doc-writer |
+| all | database-extractor, api-extractor | screenshot-reviewer, database-spec-writer, api-doc-writer |
+
+构建执行图时先应用此表，再进行拓扑排序。不得让 database/api 渲染依赖手册专属审核任务。
 
 ## 执行流程
 
-### Step 0: 初始化
-1. 确认目标项目路径(默认为当前工作目录)
-2. 确认输出路径(默认为 `./output/`)
-3. 确认文档类型(默认 `manual`)
-4. 创建 `knowledge/` 目录作为 PKB 存储
+### Step 0: 解析参数
 
-### Step 1: 静态源码分析 (调用 project-explorer)
-- 调用 `project-explorer` Skill
-- **无论生成什么文档,这一步只跑一次**
-- project-explorer 会根据文档类型决定扫描深度:
-  - `manual`: 扫描到 modules/pages/roles/workflows 即可
-  - `database`: 额外执行阶段3.5数据库深度扫描
-  - `api`: 额外执行阶段3.6 API深度扫描
-  - `all`: 执行全部扫描阶段
-- 产出: `knowledge/` 下的 YAML 文件
-- **检查点**:根据文档类型校验必需的 PKB 文件存在
-
-### Step 2: 运行时探索 (仅 --deep 模式,manual/all)
-- **默认跳过。** 仅当用户传 `--deep` 且文档类型为 manual/all 时执行。
-- **前置要求**:用户需先自行启动项目,并在 `knowledge/screenshot-config.yaml` 中填写 base_url 和测试账号。
-- 此阶段必须在 writers 之前完成,以便用更完整的 PKB 生成文档:
-  1. 检测 base_url 连通性(用户应已自行启动项目)
-  2. 连通后调用 `runtime-explorer`,用 chrome-devtools-mcp 探索弹窗/表单/校验规则
-  3. runtime-explorer 将发现回写 `knowledge/runtime.yaml`,并补全 pages.yaml/workflows.yaml
-- **降级路径**:base_url 不可达 → 提示用户先启动项目,跳过 deep 阶段,`runtime.yaml` 标记 `status: not_explored`,继续后续流程(不阻塞)。
-
-### Step 2.5: 图表生成 (调用 diagram-generator)
-- 在文档生成之前,先根据文档类型生成对应的 UML 图表
-- `--type database`:从 database.yaml 生成 ER 图
-- `--type api`:从 workflows.yaml + apis.yaml 生成时序图
-- `--type manual`:从 workflow_chains 生成流程图 + 从 modules.yaml 生成功能总览图
-- `--type all`:以上全部
-- 产出: `output/diagrams/*.png` + `output/diagrams/manifest.yaml`
-- **检查点**:确认 manifest.yaml 中列出的图表 PNG 文件均已生成
-- **如果渲染失败**(无网络/服务器超时):跳过图表生成,writers 使用文字描述替代,继续后续流程
-
-### Step 3: 按文档类型生成
-
-#### 如果 --type manual 或 all:
-1. 调用 `manual-writer` → `output/manual.md`(读取 manifest.yaml 在对应位置嵌入流程图和总览图)
-2. 调用 `qa-reviewer` 审核 `output/manual.md`(可能新增图片占位)
-3. 调用 `screenshot-planner` → `knowledge/screenshots.yaml`(读取 qa-reviewer 审核后的 manual.md)
-
-#### 如果 --type database 或 all:
-1. **前置检查**:确认 `knowledge/database.yaml` 存在且非空
-2. 调用 `database-spec-writer` → `output/database-spec.md`
-
-#### 如果 --type api 或 all:
-1. **前置检查**:确认 `knowledge/apis.yaml` 存在且非空
-2. 调用 `api-doc-writer` → `output/api-doc.md`
-
-### Step 4: 截图采集 (调用 webapp-testing + screenshot-reviewer)
-**仅对 --type manual 或 all 执行。需用户先自行启动项目。**
-
-#### 4.1 连接检测
-- 读取 `knowledge/screenshot-config.yaml`
-- 检测 base_url 是否可达
-- 如不可达,提示用户:"请先启动项目并确认浏览器能访问 {base_url}",等待用户确认后重试
-
-#### 4.2 批量截图
-- 调用 `webapp-testing`,使用 Playwright 按 `screenshots.yaml` 批量截图
-- 产出: `output/screenshots/*.png` + `output/capture-result.json`
-
-#### 4.3 截图审核
-- 调用 `screenshot-reviewer` 检查截图质量
-- 不合格截图生成补拍清单,最多补拍 2 轮
-- 最终更新 `screenshots.yaml` 中每张图的 status
-
-#### 4.4 完成
-- 关闭 Playwright 浏览器,不关闭用户的项目
-
-**截图采集失败处理:**
-- base_url 不可达 → 提示用户启动项目,手册保留占位标记
-- Playwright 未安装 → 提示安装后重试,手册保留占位标记
-- 部分截图失败 → 成功的图嵌入文档,失败的保留占位
-
-### Step 5: 文档渲染 (调用 document-renderer)
-将所有生成的 Markdown 渲染为 DOCX:
-
-| 输入 | 输出 |
-|------|------|
-| output/manual.md | output/用户使用手册.docx |
-| output/database-spec.md | output/数据库设计说明书.docx |
-| output/api-doc.md | output/API接口文档.docx |
-
-渲染时:
-- 如果 `output/screenshots/` 存在已审核的截图,将手册中的占位标记替换为实际图片引用
-- 如果截图不存在或未审核,保留占位标记
-
-## V2 版本增强(对比 V1)
-
-V2 相比 V1,以下组件从占位状态升级为实际执行:
-
-| 组件 | V1 状态 | V2 状态 | 触发条件 |
-|------|---------|---------|---------|
-| runtime-explorer | ⬜ 占位 | ✅ chrome-devtools-mcp 探索 | `--deep` 参数 |
-| webapp-testing | ⬜ 占位 | ✅ Playwright 截图(连接用户已启动的项目) | 自动(manual/all 模式) |
-| screenshot-reviewer | ⬜ 占位 | ✅ 程序化 + MCP 审核 | 截图完成后 |
-
-**V2 新增依赖:**
-- Playwright(`pip install playwright && playwright install chromium`)
-- chrome-devtools-mcp(本环境已内置)
-- **用户需自行启动目标项目**(不依赖 Docker 自动启动)
-
-**完整执行链路:**
 ```
-Step 1:   project-explorer  → PKB
-Step 2:   (--deep) 用户确保项目已运行 + runtime-explorer 探索 → 回写 PKB
-Step 2.5: diagram-generator → UML 图表
-Step 3:   writers(manual-writer → qa-reviewer → screenshot-planner) → Markdown + screenshots.yaml
-Step 4:   webapp-testing    → 连接用户项目 → Playwright 截图
-Step 4.3: screenshot-reviewer → 截图审核 + 补拍
-Step 5:   document-renderer → DOCX(嵌入实际截图)
+--type   manual(默认) / database / api / all
+--stage  all(默认) / explorer / runtime / diagram / writer / review / screenshot / render
+--deep   启用运行时探索(默认不启用)
+--format docx(默认) / pdf / html
+--lang   zh(默认) / en
 ```
 
-## 输出物清单
+1. 初始化 .gitignore: 如项目根目录无 `.gitignore`,从 `templates/.gitignore.template` 复制;如已存在,提示用户手动补充 `knowledge/screenshot-config.yaml` 和 `.cache/` 等敏感路径
 
-### --type manual(默认)
-1. `knowledge/*.yaml` —— 完整的 PKB
-2. `output/diagrams/*.png` —— 流程图 + 功能总览图
-3. `output/manual.md` —— 审核后的 Markdown 手册(含图表引用)
-4. `output/screenshots/*.png` —— 实际界面截图(V2)
-5. `output/用户使用手册.docx` —— 最终 DOCX(含 UML 图 + 界面截图)
-6. `knowledge/screenshots.yaml` —— 截图计划(含采集状态)
+### Step 1: 构建执行计划
 
-### --type database
-1. `knowledge/database.yaml` —— 数据库 PKB
-2. `output/diagrams/er-diagram.png` —— ER 实体关系图
-3. `output/database-spec.md` —— Markdown 数据库说明书(含 ER 图)
-4. `output/数据库设计说明书.docx` —— 最终 DOCX
+根据 `--type` 和 `--stage` 决定要执行哪些 Skill:
 
-### --type api
-1. `knowledge/apis.yaml` —— API PKB
-2. `output/diagrams/sequence-*.png` —— 接口时序图
-3. `output/diagrams/manifest.yaml` —— 图表清单
-4. `output/api-doc.md` —— Markdown API 文档(含时序图引用)
-5. `output/API接口文档.docx` —— 最终 DOCX
+**按 --type 选择 Writer:**
 
-### --type all
-以上全部,共 3 份 DOCX 文档。
+| --type | 执行的 Writer |
+|--------|-------------|
+| manual | manual-writer |
+| database | database-spec-writer |
+| api | api-doc-writer |
+| all | 三个全部 |
 
-## 错误处理
+**按 --stage 过滤:**
 
-- 任何阶段失败时,记录错误并询问用户是否继续
-- PKB 为空 → 终止,提示用户检查项目结构
-- database.yaml 不存在 → 跳过数据库文档,提示"未发现数据库结构"
-- apis.yaml 不存在 → 跳过 API 文档,提示"未发现接口定义"
-- 渲染失败 → 检查 pandoc/python-docx 是否安装
+| --stage | 执行哪些阶段的 Skill |
+|---------|---------------------|
+| all(默认) | 全部 |
+| explorer | 执行 project-explorer，并按 --type 执行对应 Extractor |
+| runtime | 只执行 runtime-explorer(需 --deep) |
+| diagram | 只执行 diagram-generator |
+| writer | 只执行对应 Writer |
+| review | 只执行 qa-reviewer |
+| screenshot | 执行 screenshot-planner + webapp-testing + screenshot-reviewer |
+| render | 只执行 document-renderer |
+
+**--stage 的使用场景:**
+- `--stage explorer`: 只扫描源码,生成 PKB,不生成文档
+- `--stage writer`: 只生成 Markdown(前提 PKB 已存在)
+- `--stage render`: 只渲染 DOCX(前提 Markdown 已存在)
+- `--stage screenshot`: 只截图(前提手册已生成)
+
+### Step 1.5: dry-run 输出(仅 --dry-run 模式)
+
+如用户传入 `--dry-run` 参数,输出执行计划表格后**直接退出,不调用任何 Skill**:
+
+
+执行计划(--dry-run,不实际执行):
+
+| Skill | 阶段 | 会执行? | 缓存命中? | depends_on |
+|-------|------|---------|-----------|------------|
+| project-explorer | explorer | ✅ | ❌ | — |
+| database-extractor | explorer | ✅ | ❌ | project-explorer |
+| api-extractor | explorer | ✅ | ❌ | project-explorer |
+| diagram-generator | diagram | ✅ | ❌ | project-explorer |
+| manual-writer | writer | ✅ | ❌ | project-explorer, diagram-generator |
+| database-spec-writer | writer | ✅ | ❌ | project-explorer, diagram-generator |
+| api-doc-writer | writer | ✅ | ❌ | project-explorer, diagram-generator |
+| qa-reviewer | review | ✅ | ❌ | manual-writer |
+| screenshot-planner | screenshot | ✅ | ❌ | manual-writer |
+| webapp-testing | screenshot | ✅ | ❌ | screenshot-planner |
+| screenshot-reviewer | screenshot | ✅ | ❌ | webapp-testing |
+| document-renderer | render | ✅ | ❌ | qa-reviewer, screenshot-reviewer |
+
+如需实际执行,请去掉 --dry-run 参数。
+
+
+缓存命中状态需要实际检查 cache_key 文件哈希后才能确定。在 dry-run 中,如 `.cache/` 目录为空则全部显示"❌(无缓存)",否则显示"?(需检查)"。
+
+### Step 2: 缓存检查
+
+对计划中的每个 Skill,检查其 `cache_key` 文件是否变更:
+
+```
+1. 读取 .cache/{skill-name}.hash(上次执行时的文件哈希)
+2. 计算当前 cache_key 文件的哈希
+3. 如哈希一致 → 跳过该 Skill,输出"⏭ {skill-name}: 缓存命中,跳过"
+4. 如哈希不一致或无缓存 → 执行该 Skill
+5. 执行完成后,保存新的哈希到 .cache/{skill-name}.hash
+```
+
+**缓存文件结构:**
+```
+.cache/
+├── project-explorer.hash    # 记录源码文件哈希
+├── diagram-generator.hash   # 记录 PKB 相关 YAML 哈希
+├── manual-writer.hash       # 记录 PKB 哈希
+├── qa-reviewer.hash         # 记录 manual.md 哈希
+├── webapp-testing.hash      # 记录 screenshots.yaml 哈希
+└── document-renderer.hash   # 记录 Markdown 哈希
+```
+
+**强制刷新:** 用户传 `--no-cache` 时忽略所有缓存,全量重新执行。
+
+`qa-reviewer` 的缓存键必须同时覆盖 `manual.md`、页面/工作流 PKB；其输出验证必须包含 `visual-coverage-report.json` 且 `missing_count = 0`。视觉覆盖未通过时不得调度 screenshot-planner。
+
+**缓存算法迁移说明:** 缓存哈希使用 SHA-256。旧 `.cache/*.hash` 文件需删除后重建,首次升级后执行一次 `--no-cache` 即可。
+
+**缓存检查脚本(Python 辅助):**
+
+```python
+import hashlib
+import json
+from pathlib import Path
+
+def check_cache(skill_name: str, cache_key_files: list, cache_dir: str = ".cache") -> bool:
+    """
+    检查 Skill 的缓存是否命中。
+    返回 True 表示缓存命中(可跳过),False 表示需要重新执行。
+    """
+    cache_file = Path(cache_dir) / f"{skill_name}.hash"
+
+    # 计算当前文件哈希
+    current_hash = {}
+    for pattern in cache_key_files:
+        for f in Path(".").glob(pattern):
+            if f.is_file():
+                current_hash[str(f)] = hashlib.sha256(f.read_bytes()).hexdigest()
+
+    current_hash_str = json.dumps(current_hash, sort_keys=True)
+
+    # 对比缓存
+    if cache_file.exists():
+        saved_hash = cache_file.read_text(encoding="utf-8")
+        if saved_hash == current_hash_str:
+            return True  # 缓存命中
+
+    # 检查阶段只读，不能提前写入；Skill 成功且 outputs 验证通过后再调用 save_cache。
+    return False
+
+
+def save_cache(skill_name: str, cache_key_files: list, cache_dir: str = ".cache"):
+    """Skill 执行完成后保存缓存"""
+    cache_file = Path(cache_dir) / f"{skill_name}.hash"
+    current_hash = {}
+    for pattern in cache_key_files:
+        for f in Path(".").glob(pattern):
+            if f.is_file():
+                current_hash[str(f)] = hashlib.sha256(f.read_bytes()).hexdigest()
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps(current_hash, sort_keys=True), encoding="utf-8")
+```
+
+`webapp-testing` 会更新 `knowledge/screenshots.yaml` 的状态，因此其缓存键必须只取稳定的计划字段
+(`id/route/state_name/state_type/action/highlight/full_page/roles`)与截图配置；不得直接对执行后会变化的整个 YAML 求哈希。
+
+### Step 3: 拓扑排序
+
+按 `depends_on` 对要执行的 Skill 排序:
+
+```
+1. 从待执行 Skill 列表中找出 depends_on 为空或已完成的
+2. 执行它们
+3. 标记为已完成
+4. 回到步骤 1,直到全部执行完
+```
+
+**并行优化:** 同一阶段内无依赖关系的 Skill 可以并行执行:
+- diagram-generator 完成后,manual-writer / database-spec-writer / api-doc-writer 可并行
+- 但在 Skill 体系中,LLM 逐个调用更安全,并行通过 Task 工具实现
+
+### Step 4: 逐阶段执行
+
+按拓扑顺序逐个调用 Skill。每个 Skill 执行前:
+1. 检查缓存(除非 --no-cache)
+2. 检查 depends_on 是否已完成
+3. 调用 Skill
+4. 验证 outputs 是否生成
+5. 保存缓存
+
+**执行日志格式:**
+```
+[explorer] project-explorer: 执行中... 完成 ✅ (产出 7 个 YAML)
+[runtime]  runtime-explorer: 跳过(未传 --deep) ⏭
+[diagram]  diagram-generator: 缓存命中,跳过 ⏭
+[writer]   manual-writer: 执行中... 完成 ✅ (产出 manual.md)
+[writer]   database-spec-writer: 执行中... 完成 ✅
+[review]   qa-reviewer: 执行中... 完成 ✅ (修正 3 处)
+[screenshot] screenshot-planner: 执行中... 完成 ✅
+[screenshot] webapp-testing: 执行中... 完成 ✅ (20/22 张成功)
+[screenshot] screenshot-reviewer: 执行中... 完成 ✅ (2 张需补拍)
+[render]   document-renderer: 执行中... 完成 ✅ (产出 用户使用手册.docx)
+```
+
+### Step 5: 汇总报告
+
+执行完成后输出总结:
+
+```markdown
+# 文档生成报告
+
+## 执行概况
+- 文档类型: --type all
+- 执行模式: 完整流程
+- 缓存跳过: 2 个 Skill
+- 实际执行: 8 个 Skill
+- 总耗时: ~{时间}
+
+## 各阶段结果
+
+| 阶段 | Skill | 状态 | 缓存 | 说明 |
+|------|-------|------|------|------|
+| explorer | project-explorer | ✅ | — | 产出 7 个 YAML |
+| runtime | runtime-explorer | ⏭ | — | 未启用 --deep |
+| diagram | diagram-generator | ⏭ | 命中 | PKB 未变更 |
+| writer | manual-writer | ✅ | — | 产出 manual.md |
+| writer | database-spec-writer | ✅ | — | 产出 database-spec.md |
+| writer | api-doc-writer | ✅ | — | 产出 api-doc.md |
+| review | qa-reviewer | ✅ | — | 修正 3 处术语 |
+| screenshot | screenshot-planner | ✅ | — | 规划 22 张截图 |
+| screenshot | webapp-testing | ✅ | — | 采集 20/22 张 |
+| screenshot | screenshot-reviewer | ✅ | — | 2 张需补拍 |
+| render | document-renderer | ✅ | — | 产出 3 份 DOCX |
+
+## 产出文件
+- output/用户使用手册.docx
+- output/数据库设计说明书.docx
+- output/API接口文档.docx
+
+## 缓存状态
+已保存到 .cache/,下次执行时增量跳过。
+```
 
 ## 使用方式
 
-### 生成用户手册(默认)
-```
-invoke_command:/doc-gen
-```
-
-### 生成数据库说明书
-```
-invoke_command:/doc-gen --type database
-```
-
-### 生成 API 文档
-```
-invoke_command:/doc-gen --type api
-```
-
-### 一键生成全部文档
+### 完整流程(默认)
 ```
 invoke_command:/doc-gen --type all
 ```
 
-### 指定项目路径
+### 只扫描源码(不生成文档)
 ```
-invoke_command:/doc-gen /path/to/project --type all
+invoke_command:/doc-gen --stage explorer
 ```
 
-### 可选参数汇总
+### 只生成 Markdown(不截图不渲染)
+```
+invoke_command:/doc-gen --type manual --stage writer
+```
+
+### 只截图(前提:手册已生成)
+```
+invoke_command:/doc-gen --stage screenshot
+```
+
+### 只渲染 DOCX(前提:Markdown 已生成)
+```
+invoke_command:/doc-gen --type all --stage render
+```
+
+### 深度模式 + 完整流程
+```
+invoke_command:/doc-gen --type all --deep
+```
+
+### 强制全量重新生成(忽略缓存)
+```
+invoke_command:/doc-gen --type all --no-cache
+```
+
+## 可选参数汇总
+
 | 参数 | 可选值 | 默认值 | 说明 |
 |------|--------|--------|------|
 | `--type` | manual / database / api / all | manual | 文档类型 |
-| `--deep` | - | 不启用 | 启用运行时探索(chrome-devtools-mcp,需用户先自行启动项目,在 writers 之前补全 PKB) |
+| `--stage` | all / explorer / runtime / diagram / writer / review / screenshot / render | all | 执行阶段 |
+| `--deep` | — | 不启用 | 启用运行时探索 |
 | `--format` | docx / pdf / html | docx | 输出格式 |
 | `--lang` | zh / en | zh | 文档语言 |
+| `--no-cache` | — | 不启用 | 忽略缓存,全量重新生成 |
+| `--dry-run` | — | 不启用 | 输出执行计划(哪些 Skill 会跑、哪些被缓存跳过)而不实际执行 |
+
+## 错误处理
+
+- 任何阶段失败 → 记录错误,询问用户是否继续后续阶段
+- PKB 为空 → 终止,提示先执行 `--stage explorer`
+- 缓存文件损坏 → 自动删除,重新执行
+- depends_on 未满足 → 自动补充执行依赖的 Skill
+
+## 输出物清单
+
+### --type manual
+1. `knowledge/*.yaml` —— PKB
+2. `output/diagrams/*.png` —— UML 图表
+3. `output/manual.md` —— Markdown 手册
+4. `output/screenshots/*.png` —— 界面截图
+5. `output/用户使用手册.docx` —— 最终 DOCX
+6. `.cache/*.hash` —— 缓存文件
+
+### --type database
+1. `knowledge/database/`
+2. `output/diagrams/er-diagram.png`
+3. `output/database-spec.md`
+4. `output/数据库设计说明书.docx`
+
+### --type api
+1. `knowledge/apis/`
+2. `output/api-doc.md`
+3. `output/API接口文档.docx`
+
+### --type all
+以上全部,共 3 份 DOCX 文档。

@@ -2,6 +2,65 @@
 # Project Knowledge Base (PKB) Schema
 # 技术栈无关的统一知识模型 —— 所有 Skill 的唯一事实来源 (SSOT)
 # ============================================================
+#
+# PKB 目录结构(按模块分文件,支持增量更新):
+#
+# knowledge/
+# ├── project.yaml              # 项目基本信息(单文件)
+# ├── modules/
+# │   ├── user.yaml             # 用户管理模块
+# │   ├── order.yaml            # 订单管理模块
+# │   └── ...                   # 每个模块一个文件
+# ├── pages/
+# │   ├── login.yaml            # 登录页(独立,不属于特定模块)
+# │   ├── user-list.yaml        # 用户列表页
+# │   ├── user-edit.yaml        # 用户编辑页
+# │   └── ...                   # 每个页面一个文件
+# ├── roles/
+# │   ├── admin.yaml            # 管理员角色
+# │   ├── user.yaml             # 普通用户角色
+# │   └── ...                   # 每个角色一个文件
+# ├── workflows/
+# │   ├── create-user.yaml      # 创建用户流程
+# │   ├── delete-user.yaml      # 删除用户流程
+# │   └── ...                   # 每个流程一个文件
+# ├── workflow-chains.yaml      # 业务流程链(全局,单文件)
+# ├── database/
+# │   ├── _meta.yaml            # 数据库元信息(engine/version/charset)
+# │   ├── sys_user.yaml         # 用户表
+# │   ├── sys_role.yaml         # 角色表
+# │   └── ...                   # 每张表一个文件
+# ├── apis/
+# │   ├── _meta.yaml            # API 元信息(base_url/auth_type/groups)
+# │   ├── user-api.yaml         # 用户管理接口组
+# │   ├── order-api.yaml        # 订单管理接口组
+# │   └── ...                   # 每个接口分组一个文件
+# ├── runtime/
+#   ├── _meta.yaml              # 运行时探索元信息(status/explored_pages)
+#   ├── dialogs.yaml            # 发现的弹窗
+#   └── validation.yaml         # 校验规则
+# ├── screenshots.yaml          # 截图计划(单文件)
+# └── screenshot-config.yaml    # 截图配置(用户填写)
+#
+# ID 命名规范(路径遍历防护):
+# - modules/pages/roles/workflows 的 id 字段:仅允许 [a-z0-9-],必须以字母或数字开头,长度 1-64
+# - database 的表名:允许 [a-z0-9_-](兼容下划线命名如 sys_user)
+# - 校验正则(通用):^[a-z0-9][a-z0-9-]{0,63}$
+# - 校验正则(表名):^[a-z0-9_][a-z0-9_-]{0,63}$
+# - 非法 ID 将被跳过并记录 warning,不会用作文件名
+#
+# 读取规则:
+# - 需要全部模块时:读取 knowledge/modules/ 目录下所有 *.yaml
+# - 需要特定模块时:只读取 knowledge/modules/{module_id}.yaml
+# - 增量更新时:只重写变更的文件,不影响其他文件
+# - 兼容模式:如果 knowledge/modules/ 目录不存在但 modules.yaml 存在,
+#   按旧格式读取单文件(向后兼容)
+#
+
+# PKB Schema 版本(所有读取 PKB 的 Skill 应检查此版本)
+# 当前支持版本: ["1.0"]
+# 升级 PKB 结构时递增次版本号,不兼容变更递增主版本号
+schema_version: "1.0"
 
 # ---- project.yaml: 项目基本信息 ----
 project:
@@ -64,6 +123,10 @@ workflows:
       - order: 1
         page_id: ""           # 在哪个页面
         action: ""            # 做什么操作(如"点击'新增'按钮")
+        selector: ""          # 可稳定定位目标时记录 selector；优先 data-testid/data-action
+        value: ""             # fill/select/press/upload 动作所需值
+        ui_effect: ""         # page/dialog/drawer/dropdown/form_filled/confirm/success/error/none
+        capture: "auto"       # auto/always/never；auto 按 ui_effect 和动作判断
         result: ""            # 操作结果(如"弹出创建对话框")
         notes: ""             # 注意事项
     preconditions: []         # 使用前提条件
@@ -182,23 +245,35 @@ apis:
 screenshots:
   - id: ""                    # 如 shot-5-2
     manual_ref: ""            # 对应手册位置(如"5.2 创建用户-步骤3")
+    placeholder: ""           # 手册占位符中的精确键(如"创建用户-步骤3")，供渲染器映射
+    state_name: ""            # 目标界面状态名，如“联系详情弹窗”
+    state_type: "page"        # page/dialog/drawer/dropdown/form_filled/confirm/success/error
+    replay_from: "route"      # 固定为 route；每张图从路由初始状态独立重放
     page_id: ""               # 需要截图的页面
     app: ""                   # 所属前端应用(从 pages.app 复制,决定用哪个 base_url)
     route: ""                 # 页面路由(供 webapp-testing 导航)
     routes: {}                # 多主题路由映射(如 {admin: "/admin/users", user: "/users"},从 pages.routes 复制)
     menu_path: ""             # 菜单路径(参考)
-    action: ""                # 截图前的操作(脚本消费)
+    action: ""                # 字符串兼容模式，或结构化动作列表 [{type, selector, value?, wait_after?}]
+    selector_status: "resolved" # resolved/unresolved；unresolved 必须进入审核警告
     need_scroll: false        # 是否需要滚动(脚本消费)
-    highlight: ""             # 需要高亮的元素(脚本消费)
+    highlight: ""             # 需要自动标注的元素，使用 、/，/, 分隔；脚本按顺序编号
     full_page: false          # 是否整页截图(脚本消费)
     wait_after_action: 500    # 操作后等待毫秒(脚本消费)
     data_state: ""            # 需要的数据状态(规划信息,脚本不自动构造)
-    prerequisite_shots: []    # 依赖的前置截图ID(规划信息)
+    capture_reason: ""        # 为什么该 UI 状态需要单独截图
+    prerequisite_shots: []    # 仅用于排序/说明；脚本不会继承前一截图的页面状态
     need_dialog: false        # 需触发弹窗(规划信息,用 action 描述触发)
     need_expand: false        # 需展开下拉(规划信息,用 action 描述触发)
     need_confirm: false       # 需触发确认提示(规划信息)
     need_error_state: false   # 需制造错误输入(规划信息)
     roles: []                 # 适用角色(多角色截图过滤)
+    annotation:               # 采集后由脚本写入的自动标注统计
+      requested: 0
+      matched: 0
+      missing: []
+    annotation_warnings: []   # 未命中或绘制失败警告；不改变 captured 状态
+    action_warnings: []       # 动作未识别/元素未命中；有内容时截图状态为 partial
     status: "planned"         # planned / captured / partial / failed / reviewed / need_retake
 
 # ---- runtime.yaml: 运行时探索发现(由 runtime-explorer 在 --deep 模式写入) ----

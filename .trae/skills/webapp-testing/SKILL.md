@@ -5,6 +5,25 @@ description: "Web应用自动化截图采集器(V2)。连接用户已启动的�
 
 # WebApp Testing —— Web 应用自动化截图采集器
 
+## Skill 契约
+
+```yaml
+inputs:
+  - knowledge/screenshots.yaml
+  - knowledge/screenshot-config.yaml
+outputs:
+  - output/screenshots/*.png
+  - output/screenshots/original/*.png
+  - knowledge/screenshots.yaml (更新 status)
+  - output/capture-result.json
+depends_on:
+  - screenshot-planner
+cache_key:
+  - knowledge/screenshots.yaml (仅稳定计划字段)
+  - knowledge/screenshot-config.yaml
+stage: screenshot
+```
+
 你的任务是连接到用户已启动的目标项目,使用 Playwright 按照 `screenshots.yaml` 截图计划批量采集实际界面截图。
 
 ## 前置条件
@@ -12,17 +31,18 @@ description: "Web应用自动化截图采集器(V2)。连接用户已启动的�
 1. **用户已自行启动项目**并通过浏览器确认可以正常访问(不负责启动项目)
 2. 系统已安装 Playwright(`pip install playwright && playwright install chromium`)
 3. 用户提供截图配置文件 `knowledge/screenshot-config.yaml`(含访问 URL + 测试账号)
+4. 密码字段支持 `${ENV_VAR}` 环境变量引用,避免明文提交到 git
 
 ## 输入
 
 - `knowledge/screenshots.yaml` —— 截图计划(由 screenshot-planner 生成)
 - `knowledge/screenshot-config.yaml` —— 截图配置(URL、账号等)
-- `knowledge/pages.yaml` —— 页面路由信息(辅助登录)
 - `output/retake-list.yaml` —— 补拍清单(可选,由 screenshot-reviewer 产出。若存在则仅补拍其中列出的截图 ID)
 
 ## 输出
 
 - `output/screenshots/*.png` —— 采集的截图文件
+- `output/screenshots/original/*.png` —— 未添加标注和浏览器头的纯页面原图（`keep_original: true` 时）
 - 更新 `knowledge/screenshots.yaml` 中每条记录的 `status`
 - `output/capture-result.json` —— 结构化采集结果(**供 screenshot-reviewer 读取**),字段:`total` / `captured` / `partial` / `failed` / `results[]`,其中每个 result 含 `id` / `status`(captured / partial / failed) / `error`
 - `output/screenshot-capture-report.md` —— 人类可读的采集报告
@@ -34,9 +54,49 @@ description: "Web应用自动化截图采集器(V2)。连接用户已启动的�
 读取 `knowledge/screenshot-config.yaml`,如不存在则引导用户创建(模板见 `templates/screenshot-config.yaml`)。
 
 **校验项:**
-- screenshot.base_url 非空
+- 顶层 `base_url` 非空，或 `apps.*.base_url` 至少配置一个
 - test_accounts 至少有一个角色
 - screenshots.yaml 中有 `status: planned` 的记录
+
+### Step 1.5: 询问用户截图模式(交互)
+
+在连接项目之前,询问用户选择浏览器运行模式。这是本 Skill 唯一需要用户交互的步骤。
+
+**询问策略(满足任一条件则跳过询问):**
+
+1. **命令行已显式指定**(`--headed` 或 `--headless`):不询问,直接使用
+2. **配置文件显式禁用询问**(`screenshot.interactive: false`):不询问,直接使用配置中的 `headless` 值
+3. **补拍模式**(`output/retake-list.yaml` 存在):默认沿用上次设置,不询问(补拍通常是已知问题,不需要再看过程)
+
+**询问内容(使用 AskUserQuestion 工具):**
+
+```
+问题: 截图使用哪种浏览器模式?
+选项:
+  1. 无头模式(推荐)    —— 快速采集,无窗口干扰,适合批量截图
+  2. 有头模式          —— 可见浏览器窗口,便于观察截图过程
+  3. 有头 + 慢动作调试  —— 每步操作放慢 500ms,用于排查选择器/登录失败
+```
+
+**处理用户选择:**
+
+| 用户选择 | 写入/传递 | 命令行参数 |
+|---|---|---|
+| 无头模式(推荐) | `headless: true` | `--headless`(或默认) |
+| 有头模式 | `headless: false` | `--headed` |
+| 有头 + 慢动作调试 | `headless: false, slow_mo: 500` | `--headed --slow-mo 500` |
+
+**回写配置(记忆选择):**
+
+用户选择后,将其写回 `knowledge/screenshot-config.yaml` 的 `screenshot.headless` 和 `screenshot.slow_mo` 字段。这样:
+- 下次执行本 Skill 时,可作为默认值
+- screenshot-reviewer 触发的补拍可直接复用,无需再次询问
+
+> **凭据安全警告(必须遵守):** 回写时只能**局部更新** `screenshot.headless` 和 `screenshot.slow_mo` 两个字段,**严禁整文件重写**。该文件含 `${ENV_VAR}` 密码引用、`apps`、`test_accounts` 等结构,整文件覆写可能破坏密码占位符或丢失字段。推荐用 YAML 解析后只改这两个键再 dump,或用文本替换精确修改这两行。
+
+**环境兼容性兜底:**
+
+若用户选择有头模式但当前环境无法启动 GUI(如 SSH / 无 display 的 Linux 服务器),脚本会自动回退到无头模式并输出警告。脚本内部已实现该回退逻辑(generate_screenshots.py 中 `launch` 失败时 try/except 回退)。
 
 ### Step 2: 连接性检测
 
@@ -65,7 +125,7 @@ curl -sf {base_url} --connect-timeout 5
 
 ```python
 # 伪代码
-1. 启动 Chromium(headless 模式)
+1. 启动 Chromium(按 Step 1.5 用户选择的模式:无头 / 有头 / 有头+慢动作)
 2. 设置视口大小(默认 1920x1080)
 3. 按 test_accounts 中第一个角色登录系统
 4. 遍历 screenshots.yaml 中的计划:
@@ -73,10 +133,56 @@ curl -sf {base_url} --connect-timeout 5
    b. 执行 prerequisite 操作(如点击按钮触发弹窗)
    c. 等待页面加载完成
    d. 高亮指定元素(可选)
-   e. 截图保存到 output/screenshots/{id}.png
+   e. 原图保存到 output/screenshots/original/{id}.png，并按 highlight 自动生成编号、箭头和标签到 output/screenshots/{id}.png
    f. 记录成功/失败状态
 5. 关闭浏览器
 ```
+
+**自动标注配置：** 默认启用 `screenshot.auto_annotate: true`，样式为 `numbered_arrow`，颜色由 `annotation_color` 控制。命令行 `--annotate` / `--no-annotate` 的优先级高于配置。没有 `highlight` 时不绘制。目标未命中不会使截图失败，而是在结果中写入 `annotation.missing` 和 `annotation_warnings`。
+
+浏览器头使用 `--add-chrome` / `--no-add-chrome` 覆盖配置，两个方向都必须支持。
+
+每条采集结果包含：
+
+```yaml
+annotation:
+  requested: 3
+  matched: 2
+  missing: ["用户列表表格"]
+annotation_warnings:
+  - "未找到标注目标：用户列表表格"
+```
+
+**截图前脱敏注入(必须执行):**
+
+在截图前,通过 `page.add_style_tag` 注入 CSS,遮盖敏感字段:
+
+```python
+MASK_CSS = """
+input[type="password"],
+.sensitive,
+[data-mask],
+[aria-label*="密码"],
+[aria-label*="验证码"] {
+    color: transparent !important;
+    background: #ccc !important;
+    border: 1px solid #999 !important;
+}
+/* 遮盖常见敏感数据样式 */
+.masked-text {
+    filter: blur(3px);
+}
+"""
+
+# 在每个页面截图前注入
+page.add_style_tag(content=MASK_CSS)
+```
+
+**脱敏规则:**
+- `input[type="password"]`:密码框统一灰底
+- `.sensitive` / `[data-mask]`:业务代码可主动标注的敏感字段
+- 含"密码""验证码"的 aria-label:兜底匹配
+- 模糊滤镜用于文字内容(可选)
 
 **关键实现细节:**
 
@@ -103,66 +209,23 @@ if os.path.exists("output/retake-list.yaml"):
     screenshots = [s for s in screenshots if s["id"] in retake_ids]
 ```
 
-```python
-for shot in screenshots:
-    try:
-        # 导航
-        page.goto(base_url + shot["route"])
-        page.wait_for_load_state("networkidle", timeout=15000)
-        
-        # 前置操作(如需点击触发弹窗)
-        if shot.get("action"):
-            # 根据 screenshot-planner 的 action 描述执行
-            execute_action(page, shot["action"])
-            page.wait_for_timeout(500)  # 等待动画
-        
-        # 需要滚动的场景
-        if shot.get("need_scroll"):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(300)
-        
-        # 截图
-        page.screenshot(path=f"output/screenshots/{shot['id']}.png", full_page=shot.get("full_page", False))
-        shot["status"] = "captured"
-    except Exception as e:
-        shot["status"] = "failed"
-        shot["error"] = str(e)
-```
+实际采集必须调用 `templates/generate_screenshots.py`，不要在 Skill 中复制另一套截图循环。该脚本统一负责原图保留、动作失败状态、自动标注、浏览器头、报告和原子写入。
 
-**操作执行器(将截图计划的 action 描述转为实际操作):**
+**操作执行器:** 优先执行截图计划中的完整可重放动作列表；自然语言仅兼容简单按钮点击。每张图先重新进入 route，再从第一条 action 执行到目标状态。任一动作失败或 `selector_status: unresolved` 时写入 `action_warnings`，保留截图并将状态设为 `partial`，不得继续标记为 `captured`。
 
-```python
-def execute_action(page, action_desc):
-    """
-    解析 screenshot-planner 生成的 action 描述并执行。
-    action_desc 是自然语言,如"点击新增按钮""填写表单"。
-    这里用简单关键词匹配,复杂场景需 AI 辅助。
-    """
-    desc = action_desc.lower()
-    
-    # 点击类操作
-    if "点击" in action_desc or "新增" in action_desc:
-        # 尝试多种选择器
-        for selector in ["button:has-text('新增')", "button:has-text('添加')", 
-                         "[data-action='create']", ".add-btn", "#addBtn"]:
-            try:
-                page.click(selector, timeout=2000)
-                return
-            except:
-                continue
-    
-    # 保存类操作
-    elif "保存" in action_desc:
-        for selector in ["button:has-text('保存')", "button:has-text('确定')",
-                         "[type='submit']"]:
-            try:
-                page.click(selector, timeout=2000)
-                return
-            except:
-                continue
-    
-    # 其他操作记录日志,不强制执行
-    print(f"  ⚠️ 无法自动执行操作: {action_desc}")
+```yaml
+action:
+  - type: click
+    selector: "button:has-text('新增')"
+  - type: fill
+    selector: "input[name='username']"
+    value: "测试用户"
+  - type: select
+    selector: "select[name='role']"
+    value: "user"
+  - type: wait_for
+    selector: "[role='dialog']"
+    state: "visible"
 ```
 
 ### Step 4: 多角色截图(如需)
@@ -184,6 +247,47 @@ for role_name, account in test_accounts.items():
     
     context.close()
 ```
+
+### Step 4.5: 询问是否添加浏览器头部(交互,可选)
+
+在所有截图采集完成、进入结果汇总之前,询问用户是否需要给已采集的截图拼接【真实浏览器头部图片】(在地址栏区域绘制真实 URL)。
+
+**前置条件:**
+- Pillow 已安装(`pip install pillow`)。若未安装,跳过询问并提示用户。
+- 用户提供浏览器头部模板图片(默认路径 `templates/browser_chrome_header.png`,可在 `screenshot-config.yaml` 的 `screenshot.browser_chrome_header_path` 配置)。若文件不存在,提示用户截取后放入指定路径,跳过询问。
+- 建议同时配置 `screenshot.browser_chrome_addr_rect`(地址栏区域比例),用于精确定位 URL 文字绘制位置。
+
+**询问策略(满足任一条件则跳过询问):**
+
+1. **本次截图 0 张成功**(无图可合成,直接跳过)
+2. **命令行已显式指定** `--add-chrome`:不询问,直接按命令行执行
+3. **配置已显式声明** `add_browser_chrome: true`(或 `false`):不询问,直接使用配置值
+4. **补拍模式**(`output/retake-list.yaml` 存在):默认沿用上次设置,不询问
+
+**询问内容(使用 AskUserQuestion 工具):**
+
+```
+问题: 已采集 N 张截图,是否给每张截图拼接浏览器头部(含真实 URL)?
+选项:
+  1. 不添加(推荐)   —— 纯页面截图,适合大多数技术手册
+  2. 添加浏览器头    —— 顶部拼接真实浏览器头部图片(地址栏显示真实 URL),适合产品演示
+```
+
+**用户选择"添加浏览器头"时的处理:**
+
+由于脚本中 `--add-chrome` 是在截图**之前**传入的(每张截图成功后立即合成),而此询问在所有截图**之后**进行,因此:
+
+- 若用户选择"添加",但截图阶段未传 `--add-chrome`:需要**对已保存的 PNG 执行纯后处理合成**。Agent 直接遍历 `output/screenshots/` 下的 PNG 文件,调用 `templates/generate_screenshots.py` 中的 `add_browser_chrome(png_path, url, "", header_path=..., addr_rect=...)` 函数(URL 可从 `screenshots.yaml` 的 `route` 字段取,header_path 和 addr_rect 从 config 取)。
+- 若用户选择"不添加",但截图阶段已传 `--add-chrome`:无需回退(保持已合成的图,或提示用户是否重拍覆盖)
+
+> **推荐做法:** 在 Step 3 执行脚本前,默认**不**传 `--add-chrome`;用户在此处选择"添加"后,Agent 对 output/screenshots/ 下的 PNG 执行批量后处理合成。这样避免一次性决定导致不可逆。
+
+**回写配置:** 用户选择后,写回 `knowledge/screenshot-config.yaml` 的 `screenshot.add_browser_chrome` 字段(仅局部更新,严禁整文件重写,同 Step 1.5 的凭据安全要求)。
+
+**合成内容说明:**
+- 头部图片:用户自行截取的真实浏览器顶部(标签栏 + 地址栏 + 工具栏),脚本按截图宽度等比缩放后拼接在顶部。
+- URL 文字:在 `browser_chrome_addr_rect` 指定的地址栏区域内绘制真实 URL(来自 `page.url()`),自动截断以适应宽度。
+- 不绘制额外的 logo 或商标(头部图片本身由用户提供,用户自负商标合规责任)。
 
 ### Step 5: 收集结果并更新状态
 
@@ -227,6 +331,15 @@ for role_name, account in test_accounts.items():
 | 登录失败 | 尝试备用选择器,仍失败则跳过需登录的截图 |
 | 页面导航超时 | 记录 timeout,该页截图标记 failed |
 | 元素未找到 | 截当前页面作为兜底,标记为 partial |
+| 环境变量缺失 | 报错并提示具体变量名,不静默继续 |
+
+## 日志规范
+
+生成的脚本 SHALL 统一使用 Python `logging` 模块替代 `print`:
+- `logging.info()` —— 正常流程信息
+- `logging.warning()` —— 可恢复的异常或需要注意的情况
+- `logging.error()` —— 错误信息(输出到 stderr)
+- Windows 下 SHALL 配置 `sys.stdout.reconfigure(encoding="utf-8")` 避免中文乱码
 
 ## 文件编码规范
 
@@ -238,3 +351,5 @@ for role_name, account in test_accounts.items():
 2. **截图计划为准**:只截取 screenshots.yaml 中列出的页面,不自行增加。
 3. **失败不阻塞**:单张截图失败不影响其他截图,继续执行后续计划。
 4. **清理资源**:采集完成后必须关闭浏览器。
+6. **截图前必须注入脱敏 CSS**:每个页面截图前必须执行 `page.add_style_tag(content=MASK_CSS)`,遮盖密码框和敏感字段,避免真实用户数据泄露到文档中。
+7. **浏览器头图片来源合规**:拼接用的浏览器头部图片由用户自行提供(默认 `templates/browser_chrome_header.png`),商标合规责任由用户自负。脚本仅在地址栏区域绘制纯 URL 文字,不额外添加任何浏览器 logo 或商标。

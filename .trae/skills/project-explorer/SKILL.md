@@ -1,13 +1,60 @@
 ---
 name: "project-explorer"
-description: "静态源码分析器。自动探测项目技术栈(Java/Go/多前端),扫描源码结构并提取功能模块、页面、路由、角色、业务流程等信息,输出为 PKB YAML 文件。当需要分析项目源码或 doc-gen 编排器调用时使用。"
+description: "核心源码分析器(轻量版)。自动探测项目技术栈,扫描源码结构并提取功能模块、页面、路由、角色、业务流程等核心信息。数据库和API分析由独立的 Extractor 负责。当需要分析项目源码或 doc-gen 编排器调用时使用。"
 ---
 
-# Project Explorer —— 静态源码分析器
+# Project Explorer —— 核心源码分析器
 
-你的任务是扫描项目源码,提取面向用户的功能信息,输出为技术栈无关的 PKB YAML 文件。
+## Skill 契约
+
+```yaml
+inputs:
+  - 项目源码目录(自动扫描)
+outputs:
+  - knowledge/project.yaml
+  - knowledge/modules/
+  - knowledge/pages/
+  - knowledge/roles/
+  - knowledge/workflows/
+  - knowledge/workflow-chains.yaml
+depends_on: []
+cache_key:
+  - 源码文件哈希(src/**/*.java, src/**/*.go, src/**/*.vue 等)
+stage: explorer
+```
+
+你的任务是扫描项目源码,提取**核心功能信息**(不含数据库和 API 细节),输出为技术栈无关的 PKB YAML 文件。
+
+**职责边界:**
+- ✅ 负责:项目信息、技术栈探测、模块、页面、路由、角色、业务流程
+- ❌ 不负责:数据库表结构 → 由 `database-extractor` 负责
+- ❌ 不负责:API 接口定义 → 由 `api-extractor` 负责
 
 ## 执行阶段
+
+### 阶段 0: 扫描规模评估
+
+在深入扫描前,先评估项目规模,避免一次性读取过多文件导致 token 溢出:
+
+1. 统计源码文件数(排除 node_modules/target/dist/.git/vendor)
+2. 如文件数 ≤ 500(默认阈值),正常全量扫描
+3. 如文件数 > 500,切换为**分批扫描模式**
+
+**分批扫描模式:**
+- 按目录分组(如 src/controller/、src/service/、src/views/user/ 等)
+- 每批不超过 50 个文件
+- 每批读取后立即提取关键信息,合并到中间结果
+- 优先扫描配置文件、路由文件、入口文件(信息密度最高)
+- 跳过测试文件(*Test.java、*_test.go、*.spec.js)和自动生成文件
+
+**阈值可通过 project.yaml 配置:**
+```yaml
+scan:
+  batch_threshold: 500      # 超过此文件数启用分批模式
+  batch_size: 50            # 每批最大文件数
+```
+
+**输出提示:** 如启用分批扫描,在日志中标注"⚠️ 大项目分批扫描模式已启用,共 N 批"。
 
 ### 阶段 1: 技术栈探测
 
@@ -26,7 +73,7 @@ description: "静态源码分析器。自动探测项目技术栈(Java/Go/多前
 1. 先读构建配置文件,确定后端和前端的存在性
 2. 再抽样读 3-5 个前端文件,确认前端框架(检查 `vite.config` / `next.config` / `nuxt.config` / `angular.json`)
 3. 检查路由配置文件确认路由方式
-4. 检查是否有数据库相关配置(`application.yml` / `config.yaml` / `.env`)
+4. 检查是否有数据库相关配置(`application.yml` / `config.yaml` / `.env`),**只记录数据库类型,不深入扫描表结构**(表结构由 database-extractor 负责)
 5. **多套前端识别**:扫描是否存在多个独立的前端应用。判断依据:
    - 存在多个 `package.json`(如根目录 + `admin/` 子目录 + `client/` 子目录)
    - 存在多个 `vite.config` / `next.config` / `nuxt.config` / `vue.config`
@@ -90,50 +137,45 @@ pages:
 
 ### 阶段 2: 按技术栈选策略扫描
 
-根据 `project.yaml` 的 tech_stack 字段,选择对应的扫描策略:
+根据 `project.yaml` 的 tech_stack 字段,选择对应的扫描策略。
+
+**注意:本阶段只扫描页面、路由、菜单、角色、权限。不扫描数据库表结构和 API 接口细节(那些由独立 Extractor 负责)。**
 
 ---
 
-#### 策略 A: Java Spring Boot 后端
+#### 策略 A: Java Spring Boot 后端(核心信息)
 
-**扫描目标:**
-- `@RestController` / `@Controller` → API 端点 → 转换为 pages 中的 actions
-- `@RequestMapping` / `@GetMapping` / `@PostMapping` → 路由
-- `@PreAuthorize` / `@Secured` / `@RolesAllowed` → 角色权限
-- `@Entity` / `@Table` → 数据库表 → database.yaml
-- Swagger 注解 `@ApiOperation` / `@Api` → 功能描述
+**扫描目标(仅核心信息):**
+- `@Controller` 中的页面路由(WebMvc 跳转,非 REST API) → pages
+- `@PreAuthorize` / `@Secured` / `@RolesAllowed` → 角色权限 → roles.yaml
 - 枚举类或常量类中的角色定义 → roles.yaml
+- Swagger `@Api(tags=)` → 辅助推导 modules
 
-**输出:**
-- `knowledge/apis.yaml`(API 端点,供后续生成 pages 和 workflows)
-- `knowledge/roles.yaml`(从权限注解提取角色)
-- `knowledge/database.yaml`(从实体类提取表结构)
+**不扫描(交给 api-extractor):**
+- ~~`@RestController` / `@RequestMapping` → API 端点~~
+- ~~`@RequestBody` / DTO 解析~~
+- ~~请求/响应结构~~
 
-**关键转换规则:**
-```
-@RestController + @RequestMapping("/api/users")
-  → page.id = "user-list", page.route = "/users", page.actions = [列表操作]
-@PostMapping("/create")
-  → action = "create", 加入 workflows
-@PreAuthorize("hasRole('ADMIN')")
-  → roles 中增加 admin 角色的权限
-```
+**不扫描(交给 database-extractor):**
+- ~~`@Entity` / `@Table` → 数据库表~~
+- ~~字段映射~~
 
 ---
 
-#### 策略 B: Go 后端 (Gin / Echo / Kratos)
+#### 策略 B: Go 后端 (Gin / Echo / Kratos) (核心信息)
 
-**扫描目标:**
-- 路由注册代码:`router.GET("/users", ...)` / `e.POST("/login", ...)` → 路由
+**扫描目标(仅核心信息):**
+- 路由注册中的页面路由(非 API):`router.GET("/users", renderTemplate)` → pages
 - 中间件:认证/权限中间件 → roles.yaml
-- Handler 函数名和注释 → 功能描述
-- SQL 文件或 ORM 模型(gorm/sqlx) → database.yaml
-- proto 文件(Kratos) → API 定义
+- Handler 函数名和注释 → 功能描述(辅助)
 
-**输出:**
-- `knowledge/apis.yaml`
-- `knowledge/roles.yaml`
-- `knowledge/database.yaml`
+**不扫描(交给 api-extractor):**
+- ~~API 路由注册~~
+- ~~请求/响应结构~~
+
+**不扫描(交给 database-extractor):**
+- ~~ORM 模型结构体~~
+- ~~SQL 文件~~
 
 ---
 
@@ -191,238 +233,102 @@ pages:
 
 ### 阶段 3: 语义整合
 
-将扫描结果整合为最终的 PKB YAML 文件:
+将扫描结果整合为最终的 PKB,按模块分文件输出:
 
-1. **合并 pages**:前端路由 + 后端 API → 统一的 pages.yaml
-2. **推导 modules**:按业务领域聚类 pages(如所有 user 相关 page 归入"用户管理"模块)
-3. **推导 workflows**:按页面 actions 推导常见操作流程(create → fill → save)
-4. **生成 roles**:综合前端权限 + 后端注解,产出角色定义
-5. **生成 project.yaml**:填写项目信息
+1. **推导 modules**:按业务领域聚类 pages(如所有 user 相关 page 归入"用户管理"模块)
+2. **推导 workflows**:按页面 actions 推导常见操作流程(create → fill → save)
+3. **生成 roles**:综合前端权限 + 后端注解,产出角色定义
+4. **生成 project.yaml**:填写项目信息
 
-### 阶段 3.5: 数据库深度扫描
+### 阶段 3.5: ID 合法性校验(路径遍历防护)
 
-扫描数据库相关文件,产出完整的 `database.yaml`(支持数据库说明书生成)。
+在写入文件前,对所有用作文件名的 entity_id 进行校验:
 
-**扫描来源(按优先级):**
+**校验规则:** `^[a-z0-9][a-z0-9-]{0,63}$`
+- 仅允许小写字母、数字、连字符
+- 必须以字母或数字开头
+- 长度 1-64 字符
 
-#### 来源 1: SQL 建表脚本(最准确)
-搜索 `*.sql` 文件(通常在 `db/` / `sql/` / `migration/` / `resources/` 目录):
+**需校验的字段:**
+- modules 的 id
+- pages 的 id
+- roles 的 id
+- workflows 的 id
 
-```
-CREATE TABLE sys_user (
-  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
-  username VARCHAR(50) NOT NULL COMMENT '用户名',
-  password VARCHAR(100) NOT NULL COMMENT '密码',
-  role_id BIGINT COMMENT '角色ID',
-  status TINYINT DEFAULT 1 COMMENT '状态:0禁用 1启用',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_username (username),
-  KEY idx_role_id (role_id),
-  CONSTRAINT fk_user_role FOREIGN KEY (role_id) REFERENCES sys_role(id)
-) ENGINE=InnoDB COMMENT='用户表';
-```
+**校验失败时:** 跳过该实体,记录 warning日志,不写入文件,不终止整个流程。
 
-提取规则:
-- `CREATE TABLE` → table.name, table.engine
-- `COMMENT='xxx'` → table.business_name / field.description
-- 列定义 → field.name, field.type, field.nullable, field.default
-- `AUTO_INCREMENT` → field.auto_increment
-- `PRIMARY KEY` → field.primary_key
-- `UNIQUE KEY` → field.unique, field.index_name
-- `KEY` / `INDEX` → field.index
-- `FOREIGN KEY ... REFERENCES` → field.foreign_key + relation
-- `COMMENT 'xx:0禁用 1启用'` → 解析 enum_values
+**实现示例(Python 辅助):**
+```python
+import re
+ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
-#### 来源 2: ORM 实体类(Java)
-扫描 `@Entity` / `@Table` 注解的类:
-
-```
-@Table(name = "sys_user")
-@Entity
-public class User {
-    @Id
-    @GeneratedValue(strategy = IDENTITY)
-    private Long id;
-
-    @Column(name = "username", nullable = false, length = 50, unique = true)
-    private String username;
-
-    @ManyToOne
-    @JoinColumn(name = "role_id")
-    private Role role;
-}
+def validate_id(entity_id: str, entity_type: str) -> bool:
+    if not ID_PATTERN.match(entity_id or ""):
+        print(f"⚠️ 跳过 {entity_type}: ID '{entity_id}' 不合法(仅允许 [a-z0-9-],长度1-64)")
+        return False
+    return True
 ```
 
-提取规则:
-- `@Table(name=)` → table.name
-- `@Column` → field.type(从 Java 类型+length 推导), nullable, unique
-- `@Id` → field.primary_key
-- `@GeneratedValue` → field.auto_increment
-- `@JoinColumn` → field.foreign_key + relation(N:1)
-- `@OneToMany` / `@ManyToMany` → relation(1:N / N:M)
+### 阶段 4: 输出 PKB(按模块分文件)
 
-#### 来源 3: ORM 模型(Go)
-扫描 gorm / sqlx 模型结构体:
-
-```go
-type User struct {
-    ID       int64  `gorm:"primaryKey;autoIncrement" json:"id"`
-    Username string `gorm:"type:varchar(50);not null;uniqueIndex" json:"username"`
-    RoleID   int64  `gorm:"index" json:"role_id"`
-}
-```
-
-提取规则:
-- `gorm:"primaryKey"` → field.primary_key
-- `gorm:"autoIncrement"` → field.auto_increment
-- `gorm:"type:varchar(50)"` → field.type
-- `gorm:"not null"` → field.nullable = false
-- `gorm:"uniqueIndex"` → field.unique
-- `gorm:"index"` → field.index
-
-#### 来源 4: 配置文件
-读 `application.yml` / `config.yaml` / `.env`:
-- 提取 database.engine, database.version, database.charset
-
-**关系推导:**
-- 从外键定义直接提取表关系
-- 无显式外键时,按 `xxx_id` 字段名命名约定推导:N:1 关系
-- 汇总到 `er_relations`
-
----
-
-### 阶段 3.6: API 深度扫描
-
-扫描接口定义,产出完整的 `apis.yaml`(支持 API 文档生成)。
-
-**扫描来源:**
-
-#### 来源 1: Spring Boot 注解(Java)
-```
-@RestController
-@RequestMapping("/api/v1/users")
-@Api(tags = "用户管理")
-public class UserController {
-
-    @PostMapping("/create")
-    @ApiOperation("创建用户")
-    @PreAuthorize("hasRole('ADMIN')")
-    public Result<UserVO> create(@RequestBody @Valid CreateUserDTO dto) {
-        ...
-    }
-}
-```
-
-提取规则:
-- 类级 `@RequestMapping` → apis.base_url + group
-- `@Api(tags=)` → group.name
-- 方法级 `@PostMapping` / `@GetMapping` → endpoint.method, endpoint.path
-- `@ApiOperation` → endpoint.summary
-- `@PreAuthorize` → endpoint.roles
-- `@RequestBody` 参数 DTO → 解析其字段为 request.body.fields
-- `@PathVariable` → request.params (in: path)
-- `@RequestParam` → request.params (in: query)
-- 返回类型 → response.success.body
-- `@Valid` 注解 → 推导校验规则作为字段 description
-
-**DTO/VO 解析:**
-扫描请求和响应的数据传输对象:
-
-```java
-public class CreateUserDTO {
-    @NotBlank(message = "用户名不能为空")
-    @Size(min = 3, max = 20)
-    private String username;
-
-    @Email(message = "邮箱格式不正确")
-    private String email;
-}
-```
-→ request.body.fields 包含 username(required, description="用户名不能为空,3-20字符"), email(required)
-
-#### 来源 2: Go 框架路由(Gin / Echo / Kratos)
-```go
-// Gin
-r := gin.Default()
-api := r.Group("/api/v1")
-userGroup := api.Group("/users")
-{
-    userGroup.GET("", listUsers)
-    userGroup.POST("/create", createUser)
-}
-```
-→ endpoints: GET /api/v1/users, POST /api/v1/users/create
-
-Kratos proto 文件:
-```proto
-service UserService {
-  rpc CreateUser (CreateUserRequest) returns (CreateUserReply) {
-    option (google.api.http) = {
-      post: "/api/v1/users"
-      body: "*"
-    };
-  }
-}
-```
-→ endpoint: POST /api/v1/users, 请求/响应从 message 定义提取
-
-#### 来源 3: Swagger / OpenAPI 文件(如存在)
-读取 `swagger.json` / `openapi.yaml`,直接映射到 apis.yaml(这是最完整的来源):
-
-```
-paths:
-  /api/v1/users:
-    post:
-      summary: 创建用户
-      tags: [用户管理]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateUserRequest'
-      responses:
-        '200':
-          description: 成功
-```
-
-如项目已有 Swagger 文件,**直接转换,无需扫描代码**。
-
-#### 来源 4: 通用兜底
-- 搜索所有包含 HTTP 方法关键字的代码:`GET` / `POST` / `PUT` / `DELETE` + 路径字符串
-- 搜索装饰器/注解:`@GetMapping` / `router.GET` / `@GET`
-
-**权限映射:**
-从 `roles.yaml` 和 API 的角色注解,推导每个接口的 `roles` 和 `auth_required`。
-
-### 阶段 4: 输出 PKB
-
-将所有结果写入 `knowledge/` 目录:
+将所有结果写入 `knowledge/` 目录,**每个知识实体一个文件**(支持增量更新):
 
 ```
 knowledge/
-├── project.yaml
-├── modules.yaml
-├── pages.yaml
-├── roles.yaml
-├── workflows.yaml
-├── database.yaml          (如发现数据库模型)
-└── apis.yaml              (如发现 API 端点)
+├── project.yaml                  # 项目基本信息(单文件)
+├── modules/                      # 每个模块一个文件
+│   ├── user.yaml                 # 用户管理模块
+│   │   # 内容: id, name, description, pages[], workflows[], roles[]
+│   ├── order.yaml
+│   └── ...
+├── pages/                        # 每个页面一个文件
+│   ├── login.yaml                # 登录页
+│   │   # 内容: id, app, route, routes, title, menu_path, module_id, roles, actions, fields, description
+│   ├── user-list.yaml
+│   ├── user-edit.yaml
+│   └── ...
+├── roles/                        # 每个角色一个文件
+│   ├── admin.yaml
+│   │   # 内容: id, name, description, permissions{can_access[], cannot_access[]}, typical_scenarios[]
+│   ├── user.yaml
+│   └── ...
+├── workflows/                    # 每个业务流程一个文件
+│   ├── create-user.yaml
+│   │   # 内容: id, name, module_id, roles[], steps[], preconditions[], postconditions[]
+│   ├── delete-user.yaml
+│   └── ...
+└── workflow-chains.yaml          # 业务流程链(全局,单文件)
+    # 内容: workflow_chains[]
 ```
+
+**project.yaml 必须包含 `schema_version: "1.0"` 字段**(与 pkb-schema.yaml 保持一致)。
+
+**文件命名规则:**
+- 模块文件:`modules/{module_id}.yaml`(如 `modules/user-management.yaml`)
+- 页面文件:`pages/{page_id}.yaml`(如 `pages/user-list.yaml`)
+- 角色文件:`roles/{role_id}.yaml`(如 `roles/admin.yaml`)
+- 流程文件:`workflows/{workflow_id}.yaml`(如 `workflows/create-user.yaml`)
+- 文件名全部小写,用 `-` 连接,不含特殊字符
+
+**向后兼容:**
+- 如 `knowledge/modules/` 目录不存在但 `knowledge/modules.yaml` 存在,按旧格式读取
+- 优先使用分文件结构,单文件格式仅供向后兼容
+
+**注意:此 Skill 不产出 database/ 和 apis/ 目录。** 它们分别由 `database-extractor` 和 `api-extractor` 独立产出。
 
 ## 严格约束
 
 1. **禁止幻觉**:所有功能必须从源码中找到证据。无法确认的功能标注 `confidence: low`,不得自行推测。
-2. **技术栈无关输出**:YAML 中不得出现 `@RestController` / `v-model` / `useState` 等技术术语。只保留业务语义(route, title, actions, fields)。
+2. **技术栈无关输出**:YAML 中不得出现 `@RestController` / `v-model` / `useState` 等技术术语。只保留业务语义(route, title, actions, fields)。页面操作如能从模板稳定识别，应同时记录 `selector`、`ui_effect` 和 `capture`，供截图计划重放；优先使用 `data-testid` / `data-action`，其次使用带业务文本限定的角色选择器。
 3. **中文优先**:所有面向用户的字段(title, description, menu_path)使用中文。从代码中的中文文案、Swagger 注解、i18n 文件提取。
 4. **不读不必要文件**:跳过 `node_modules/` / `target/` / `dist/` / `.git/` / `vendor/` / `*.lock`。
+5. **职责边界**:不扫描数据库表结构、不扫描 API 请求响应细节。只记录页面、路由、角色、权限。
 
 ## 产出验证
 
 完成后自检:
 - [ ] project.yaml 的 tech_stack 是否完整填写
-- [ ] modules.yaml 是否至少包含 1 个模块
-- [ ] pages.yaml 是否至少包含 1 个页面
-- [ ] roles.yaml 是否包含角色信息(如代码中存在权限控制)
+- [ ] modules/ 是否至少包含 1 个模块文件
+- [ ] pages/ 是否至少包含 1 个页面文件
+- [ ] roles/ 是否包含角色文件(如代码中存在权限控制)
 - [ ] 所有 YAML 格式是否正确(无语法错误)
-- 当 --type 为 manual/all 时,验证 workflows.yaml 中 workflow_chains 段存在且非空

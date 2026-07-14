@@ -1,0 +1,31 @@
+# 文档生成平台 .gitignore 模板
+# 复制到项目根目录后,根据需要调整
+
+# 截图配置(含测试账号密码,即使使用 ${ENV_VAR} 也建议不提交)
+knowledge/screenshot-config.yaml
+
+# 缓存文件(可重新生成)
+.cache/
+
+# 运行时探索结果(可能含环境特定信息)
+knowledge/runtime/
+
+# 截图采集结果(可能含真实界面数据)
+output/screenshots/
+output/playwright/
+output/*.render.md
+
+# 生成的文档(按需取消注释)
+# output/*.docx
+# output/*.pdf
+# output/*.html
+
+# PlantUML 临时文件
+output/diagrams/temp/
+
+# Python
+__pycache__/
+*.pyc
+
+# Office 临时文件
+~$*.docx

@@ -5,14 +5,34 @@ description: "数据库设计说明书生成器。读取 PKB 中的 database.yam
 
 # Database Spec Writer —— 数据库设计说明书生成器
 
-你的任务是读取 PKB(`knowledge/database.yaml`)并生成一份完整的数据库设计说明书。
+## Skill 契约
+
+```yaml
+inputs:
+  - knowledge/database/
+  - knowledge/project.yaml
+  - output/diagrams/manifest.yaml (如存在)
+outputs:
+  - output/database-spec.md
+depends_on:
+  - database-extractor
+  - diagram-generator (需要 ER 图)
+cache_key:
+  - knowledge/database/**/*.yaml
+stage: writer
+```
+
+你的任务是读取 PKB(`knowledge/database/`)并生成一份完整的数据库设计说明书。
 
 ## 输入
 
-- `knowledge/database.yaml` —— 数据库表结构、字段、索引、关系
+- `knowledge/database/` —— 数据库 PKB(分文件:`_meta.yaml` + 每张表一个 yaml)
+  - 向后兼容:如目录不存在,读取 `knowledge/database.yaml`
 - `knowledge/project.yaml` —— 项目基本信息
 - `output/diagrams/manifest.yaml` —— 图表清单(含 ER 图路径)
 - 大纲模板:`templates/database-spec-outline.md`
+
+> **PKB 版本检查:** 读取 `knowledge/project.yaml` 时,如 `schema_version` 不在支持范围(`["1.0"]`),输出警告并提示用户升级 Skill。
 
 ## 输出
 

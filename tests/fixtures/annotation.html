@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>自动标注测试页</title>
+  <style>
+    body { font-family: sans-serif; margin: 48px; }
+    main { display: grid; gap: 28px; width: 720px; }
+    button, input { font-size: 20px; padding: 12px 18px; }
+    [role="dialog"] { position: fixed; inset: 120px 180px; padding: 32px; background: white; border: 2px solid #444; z-index: 2; }
+  </style>
+</head>
+<body>
+  <main>
+    <button type="button">新增按钮</button>
+    <label for="search">搜索框</label>
+    <input id="search" placeholder="请输入搜索内容">
+    <button type="button" aria-label="导出数据">图标按钮</button>
+    <table aria-label="用户列表表格"><tbody><tr><td>测试用户</td></tr></tbody></table>
+    <button id="view-detail" type="button">查看</button>
+    <section id="detail-dialog" role="dialog" aria-label="联系详情" hidden>
+      <h2>联系详情</h2><p>留言：房子租出去了吗？</p>
+    </section>
+  </main>
+  <script>
+    document.querySelector('#view-detail').addEventListener('click', () => {
+      document.querySelector('#detail-dialog').hidden = false;
+    });
+  </script>
+</body>
+</html>

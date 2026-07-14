@@ -5,14 +5,42 @@ description: "用户手册生成器。读取 PKB YAML 知识库,按照标准大�
 
 # Manual Writer —— 用户手册生成器
 
+## Skill 契约
+
+```yaml
+inputs:
+  - knowledge/*.yaml (PKB 全部)
+  - output/diagrams/manifest.yaml (如存在)
+outputs:
+  - output/manual.md
+depends_on:
+  - project-explorer
+  - diagram-generator (需要嵌入图表)
+cache_key:
+  - knowledge/modules/**/*.yaml
+  - knowledge/pages/**/*.yaml
+  - knowledge/roles/**/*.yaml
+  - knowledge/workflows/**/*.yaml
+  - knowledge/workflow-chains.yaml
+stage: writer
+```
+
 你的任务是读取 PKB(`knowledge/` 目录)并生成一份完整的、面向普通用户的 Markdown 用户手册。
 
 ## 输入
 
-- PKB 目录:`knowledge/`(包含 project.yaml, modules.yaml, pages.yaml, roles.yaml, workflows.yaml 等)
-- 大纲模板:`templates/manual-outline.md`
-- `knowledge/runtime.yaml` —— 运行时探索结果(可选。若存在,读取 discovered_validation_rules 和 discovered_feedback_messages,在功能说明中补充表单校验提示和操作反馈信息)
-- `output/diagrams/manifest.yaml` —— 图表清单(可选。若存在,在对应功能章节嵌入流程图和功能总览图引用)
+- `knowledge/` —— PKB 目录(支持分文件结构)
+  - `knowledge/project.yaml` 或 `knowledge/modules/*.yaml`
+  - `knowledge/pages/*.yaml` 或 `knowledge/pages.yaml`
+  - `knowledge/roles/*.yaml` 或 `knowledge/roles.yaml`
+  - `knowledge/workflows/*.yaml` 或 `knowledge/workflows.yaml`
+  - `knowledge/workflow-chains.yaml`
+- `output/diagrams/manifest.yaml` —— 图表清单(如存在)
+
+> **PKB 读取兼容:** 优先读取分文件目录(如 `knowledge/pages/*.yaml`)。
+> 如目录不存在则回退到单文件(如 `knowledge/pages.yaml`)。两种格式二选一即可。
+
+> **PKB 版本检查:** 读取 `knowledge/project.yaml` 时,如 `schema_version` 不在支持范围(`["1.0"]`),输出警告并提示用户升级 Skill。
 
 ## 输出
 
@@ -53,10 +81,11 @@ description: "用户手册生成器。读取 PKB YAML 知识库,按照标准大�
 
 **操作步骤：**
 步骤1：{从 workflows.yaml 的 steps 逐条转换}
+【图片：{功能名}-步骤1-{界面状态}】（截图占位，后续补充）
+
 步骤2：{将 "action" 字段转为"点击""选择""输入"等用户操作语言}
 步骤3：{每步末尾附操作结果}
-
-【图片：{功能名}-步骤{N}】（截图占位，后续补充）
+【图片：{功能名}-步骤3-{界面状态}】（截图占位，后续补充）
 
 **操作结果：**
 {从 workflows.yaml 的 postconditions 提取}
@@ -81,6 +110,29 @@ description: "用户手册生成器。读取 PKB YAML 知识库,按照标准大�
 | `fields: [username, email]` | "填写用户名、邮箱等信息" |
 | `roles: [admin]` | "该功能仅管理员可用" |
 | `route: /users` | 不出现路由路径,改为"进入用户管理页面" |
+
+### 4.1 关键 UI 状态与截图占位
+
+按“界面状态”而不是“路由/功能小节”生成截图。一条路由可以有列表、弹窗、抽屉、确认框、填写完成、成功结果等多张图。
+
+必须在以下步骤后立即插入唯一占位符：
+
+（1）进入或跳转到新页面。
+（2）点击后打开弹窗、抽屉、菜单、标签页或详情区域。
+（3）展开会影响后续操作的下拉框或选择器。
+（4）连续执行输入、填写、选择、勾选、上传时，在这一连续动作组的最后一步后、提交前插入一张“表单填写完成”图；不要为每个字段单独配图。
+（5）出现确认框、校验错误、权限提示或异常提示。
+（6）提交、保存、删除、上架、下架、回复等操作完成后，页面状态明显变化。
+
+纯阅读、同一页面中没有视觉变化的说明步骤不单独配图。占位符必须紧跟触发它的步骤并位于下一条步骤之前，不得把包含多个点击/弹窗/结果状态的功能压缩成一张末尾截图，也不得把多张占位符统一堆到小节末尾。
+
+占位符格式必须包含触发步骤号和状态名：
+
+```text
+【图片：联系管理-步骤1-咨询列表】（截图占位，后续补充）
+【图片：联系管理-步骤2-联系详情弹窗】（截图占位，后续补充）
+【图片：联系管理-步骤4-回复成功】（截图占位，后续补充）
+```
 
 ### 5. 角色说明生成
 
@@ -149,7 +201,7 @@ A: 请检查以下几点：
    - **禁止**:出现源码级实现(如 `function createUser()` / `@RestController` / `router.push()`)。
    - **判断标准**:这段代码是"用户要用的"还是"开发者写的"?前者保留,后者删除。
 3. **禁止部署说明**:不涉及面向运维的安装、环境配置、服务启动等内容。但**面向最终用户的初始设置**(如"在设置页填写 API Key")属于操作指南,应当保留。
-4. **图片占位完整**:每个操作步骤必须附图片占位。
+4. **视觉状态覆盖完整**:每个关键 UI 状态必须附独立图片占位；连续输入可合并，多个点击/弹窗/结果状态不得共用一张图。
 5. **禁止幻觉**:手册中的每个功能必须能在 PKB 中找到对应记录。无法确认的内容标注 `（待确认）`,不自行补充。
 6. **禁止 Markdown 列表语法(关键)**:
    - **禁止使用** `1. ` `2. ` `3. ` 等 Markdown 有序列表语法 —— 它会被渲染器转为 Word 自动编号,导致不同模块之间编号连续递增、不重置。
@@ -170,7 +222,8 @@ A: 请检查以下几点：
 - [ ] 是否覆盖 modules.yaml 中的所有模块
 - [ ] 是否覆盖 pages.yaml 中的所有页面
 - [ ] 是否覆盖 roles.yaml 中的所有角色
-- [ ] 每个功能是否都有图片占位
+- [ ] 每个关键 UI 状态是否都有唯一图片占位
+- [ ] 是否存在多个点击/弹窗状态却只有一张末尾图片的功能
 - [ ] 是否存在任何开发术语(全局搜索检查)
 - [ ] FAQ 是否仅基于实际功能生成
 - [ ] **合并后的文件无 BOM 标记**(检查开头和中间是否有 `\ufeff` 字符)
