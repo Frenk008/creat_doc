@@ -22,3 +22,6 @@ __pycache__/
 # 本地文档与个人材料
 *.docx
 *.pdf
+
+# 本地需求与评审记录
+.trae/specs/
