@@ -228,8 +228,7 @@ runtime-explorer:bootstrap
 ```
 
 1. 校验参数组合；website 只允许 manual。
-2. 初始化 .gitignore: 如项目根目录无 `.gitignore`,从 `templates/.gitignore.template` 复制;如已存在,提示用户手动补充 `knowledge/screenshot-config.yaml` 和 `.cache/` 等敏感路径。
-3. website 模式在执行任何 Skill 前校验 screenshot-config 的 URL、测试账号和环境变量凭据。
+2. 解析 source/type/stage 并构建只读执行计划；此时不得创建、修改文件或访问目标网站。
 
 ### Step 1: 构建执行计划
 
@@ -275,6 +274,8 @@ runtime-explorer:bootstrap
 如用户传入 `--dry-run`，输出 Skill、阶段、是否执行、缓存状态和 depends_on 后直接退出，不调用任何 Skill。输出格式与缓存判定细节见 [references/orchestration-details.md](references/orchestration-details.md)。
 
 website dry-run 必须显示 `runtime-explorer:bootstrap`，不得显示 project-explorer、database-extractor 或 api-extractor；bootstrap 的缓存列固定显示“—（线上状态，每次执行）”。
+
+`--dry-run` 必须在任何文件写入、凭据解析和目标网站访问前退出。非 dry-run 才初始化 `.gitignore`（缺失时复制模板，已存在时提示补充敏感路径），并在 website 模式执行任何 Skill 前校验 screenshot-config 的 URL、测试账号和环境变量凭据。
 
 ### Step 2: 缓存检查
 

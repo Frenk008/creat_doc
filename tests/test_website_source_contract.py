@@ -27,6 +27,24 @@ class WebsiteSourceContractTests(unittest.TestCase):
         self.assertIn("runtime-explorer:enrich (仅 --deep)", skill)
         self.assertIn("diagram-generator 必须等待 enrich 完成", skill)
 
+    def test_dry_run_exits_before_mutating_setup(self):
+        skill = read(".trae/skills/doc-gen/SKILL.md")
+        dry_run_exit = skill.index("`--dry-run` 必须在任何文件写入")
+        cache_check = skill.index("### Step 2: 缓存检查")
+        self.assertLess(dry_run_exit, cache_check)
+        self.assertIn("非 dry-run 才初始化 `.gitignore`", skill)
+        self.assertIn("凭据解析和目标网站访问前退出", skill)
+
+    def test_user_guide_matches_website_contract(self):
+        guide = read("DOC-GEN-SKILL-使用指南.md")
+        self.assertIn(
+            "/doc-gen --source website --type manual --stage runtime", guide
+        )
+        self.assertIn("### 6.4 网站冷启动探索", guide)
+        self.assertIn("`runtime-explorer:bootstrap` 是例外", guide)
+        self.assertIn("Skill 本身不会绕过认证", guide)
+        self.assertNotIn("验证码或 MFA 通常需要测试环境绕过方案", guide)
+
     def test_runtime_bootstrap_has_no_project_explorer_dependency(self):
         skill = read(".trae/skills/runtime-explorer/SKILL.md")
         bootstrap_contract = skill.split("bootstrap:", 1)[1].split("enrich:", 1)[0]

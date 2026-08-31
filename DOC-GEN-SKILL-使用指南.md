@@ -53,6 +53,8 @@
 
 ### 3.1 确认目录结构
 
+首次接入时，将本仓库中的 `.trae/skills/`、`templates/` 和 `requirements.txt` 合并到目标项目根目录；`tests/` 建议同时保留用于升级后回归验证。目标项目已有同名目录时应逐项合并，不要直接覆盖其中原有的 Skill 或模板。
+
 在待生成文档的项目根目录中，至少应有：
 
 ```text
@@ -65,9 +67,11 @@
 
 不要只复制 `.trae/skills/doc-gen/`。编排器还依赖 `project-explorer`、各类 Writer、Reviewer、截图和渲染 Skill，以及根目录下的模板与脚本。
 
+用 Trae 打开目标项目根目录，在新的对话中输入 `/doc-gen --dry-run`。如果能看到执行计划，说明 Skill 已被识别；如果提示找不到指令，检查工作区根目录下是否确实存在 `.trae/skills/doc-gen/SKILL.md`。
+
 ### 3.2 安装 Python 依赖
 
-在项目根目录打开 PowerShell：
+安装 Python 3.9 或更高版本，然后在项目根目录打开 PowerShell：
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -136,6 +140,10 @@ Skill 只展示将运行的阶段、依赖与缓存情况，不修改文件。�
 
 如果没有源码，改为网站冷启动：
 
+1. 按第 6 节创建 `knowledge/screenshot-config.yaml`。
+2. 配置可访问的 HTTPS、localhost 或受控测试环境 URL，以及至少一个测试账号。
+3. 在当前终端设置配置引用的密码环境变量，并先用浏览器确认网站和账号可用。
+
 ```text
 /doc-gen --source website --type manual --stage explorer
 ```
@@ -165,11 +173,19 @@ knowledge/
 2. 按第 6 节创建 `knowledge/screenshot-config.yaml`。
 3. 在 Trae 输入：
 
+源码模式输入：
+
 ```text
-/doc-gen --stage runtime --deep
+/doc-gen --source code --stage runtime --deep
 ```
 
-运行时结果写入 `knowledge/runtime/`，并补充页面与工作流 PKB。该阶段以只读探索为主，不应执行真实增删改业务数据。
+网站模式已完成 bootstrap 后输入：
+
+```text
+/doc-gen --source website --type manual --stage runtime
+```
+
+运行时结果写入 `knowledge/runtime/`，并补充页面与工作流 PKB。该阶段严格只读，不得保存、删除、确认业务操作、上传、导出或提交表单。
 
 ### 第 4 步：生成图表
 
@@ -377,7 +393,7 @@ screenshot:
     height: 1080
   headless: true
   slow_mo: 0
-  interactive: false
+  interactive: true
   auto_annotate: true
   keep_original: true
   add_browser_chrome: false
@@ -386,6 +402,7 @@ base_url: "http://localhost:8080"
 
 test_accounts:
   admin:
+    display_name: "管理员"
     username: "admin"
     password: "${APP_ADMIN_PASS}"
     login_url: "/login"
@@ -423,6 +440,33 @@ test_accounts:
 
 模板中的 `default_mode`、`page_timeout`、`action_delay` 当前仅作说明；实际行为分别由每张截图的 `full_page`、脚本超时和 `wait_after_action` 控制。
 
+### 6.4 网站冷启动探索
+
+网站模式还会读取以下配置：
+
+```yaml
+exploration:
+  max_pages_per_role: 50
+  read_only: true
+  same_origin_only: true
+```
+
+- `max_pages_per_role`：每个角色最多探索的唯一页面数，达到上限后记录到 `skipped_pages`。
+- `read_only`：强制只读，必须保持为 `true`，不提供关闭方式。
+- `same_origin_only`：只允许访问配置网站的同源页面，必须保持为 `true`。
+- `display_name`：测试账号的可选显示名；缺省时使用页面可见角色名或账号键。
+
+执行前会验证 URL 可访问、至少存在一个完整测试账号、`${ENV_VAR}` 可以解析，并要求 URL 使用 HTTPS、localhost 或明确的受控测试环境。网站不可访问或全部账号认证失败时，不会创建虚假 PKB。
+
+探索状态写入 `knowledge/runtime/_meta.yaml`：
+
+| 状态 | 含义 |
+|---|---|
+| `complete` | 所有可登录角色完成有界遍历，没有达到页面上限 |
+| `partial` | 至少一个角色成功，但存在登录失败、超时或页面上限截断 |
+| `auth_failed` | 所有角色均无法登录 |
+| `failed` | 配置、连接或输出验证失败，无法形成最小 PKB |
+
 ## 7. 参数速查
 
 | 参数 | 可选值 | 默认值 | 说明 |
@@ -452,12 +496,14 @@ test_accounts:
 
 ## 8. 缓存与增量更新
 
-每个 Skill 成功且输出验证通过后，缓存哈希写入 `.cache/{skill-name}.hash`。再次执行时：
+除网站 bootstrap 外，每个 Skill 成功且输出验证通过后，缓存哈希写入 `.cache/{skill-name}.hash`。再次执行时：
 
 - 输入未变：该 Skill 显示“缓存命中，跳过”。
 - 相关源码或 PKB 变化：只重跑受影响阶段。
 - 缓存损坏：删除对应 `.hash` 后重跑。
 - 希望全部重建：使用 `--no-cache`。
+
+`runtime-explorer:bootstrap` 是例外：线上状态无法由本地文件哈希证明未变化，因此每次显式调度都会重新探索；它只在规范化 PKB 内容发生变化时改写文件。
 
 不要在一个阶段刚开始时手工写缓存；失败任务不得留下代表成功的缓存。
 
@@ -534,7 +580,7 @@ python templates/generate_screenshots.py `
 
 ### 登录后仍停留在登录页
 
-先用 `--headed --slow-mo 500` 独立调试；检查账号、登录 URL、登录表单选择器、验证码和单点登录流程。验证码或 MFA 通常需要测试环境绕过方案或预置登录态。
+先用 `--headed --slow-mo 500` 独立调试；检查账号、登录 URL、登录表单选择器、验证码和单点登录流程。遇到验证码或 MFA 时，联系系统维护方提供专用测试账号或合规的测试环境；Skill 本身不会绕过认证，当前也不支持自行注入预置登录态。
 
 ### 截图是空白页、Loading 或状态不符
 
