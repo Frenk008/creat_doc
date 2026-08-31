@@ -20,7 +20,7 @@
 
 ## 1. 能生成什么
 
-`doc-gen` 会分析目标项目源码，生成项目知识库（PKB），再按需要生成以下文档：
+`doc-gen` 支持两种输入来源：`--source code` 从项目源码生成 PKB；`--source website` 仅凭部署好的网站和测试账号冷启动生成用户手册 PKB。
 
 | 类型 | 参数 | 主要产物 |
 |---|---|---|
@@ -31,12 +31,14 @@
 
 用户手册流程还可以启动目标系统，自动规划、采集、标注和审核界面截图。数据库说明书与 API 文档不要求目标系统运行。
 
+网站来源第一版只支持 `--type manual`。它记录测试账号实际可见的页面和只读流程，不生成数据库说明书、完整 API 文档、后端架构或不可见权限。
+
 ## 2. 工作流程
 
 完整流程如下：
 
 ```text
-源码分析（explorer）
+知识采集（code: 源码分析；website: 网站 bootstrap）
   → 可选运行时探索（runtime，需 --deep）
   → 图表生成（diagram）
   → Markdown 编写（writer）
@@ -58,7 +60,7 @@
 ├── .trae/skills/           # doc-gen 及全部子 Skill
 ├── templates/              # 大纲、PKB、截图配置等模板
 ├── requirements.txt
-└── 项目源码...
+└── 项目源码...             # --source website 时不要求
 ```
 
 不要只复制 `.trae/skills/doc-gen/`。编排器还依赖 `project-explorer`、各类 Writer、Reviewer、截图和渲染 Skill，以及根目录下的模板与脚本。
@@ -131,6 +133,14 @@ Skill 只展示将运行的阶段、依赖与缓存情况，不修改文件。�
 ```text
 /doc-gen --type all --stage explorer
 ```
+
+如果没有源码，改为网站冷启动：
+
+```text
+/doc-gen --source website --type manual --stage explorer
+```
+
+网站模式会按测试账号逐角色登录，只读遍历同源主导航和页面，每个角色默认最多探索 50 个页面。
 
 检查以下核心产物：
 
@@ -266,7 +276,7 @@ output/retake-list.yaml          # 有不合格截图时生成
 
 至少完成以下检查：
 
-- PKB 抽查结果与源码一致。
+- code 模式的 PKB 与源码一致；website 模式的 PKB 与已观察页面一致，并披露未覆盖角色和跳过页面。
 - `qa-report.md` 中没有未处理的严重问题。
 - `visual-coverage-report.json` 的 `missing_count` 为 `0`。
 - `capture-result.json` 无 `failed`，`retake-list.yaml` 为空或已全部补拍。
@@ -277,6 +287,22 @@ output/retake-list.yaml          # 有不合格截图时生成
 ## 5. 一键执行与常用命令
 
 以下内容均输入到 Trae 对话框。
+
+### 仅凭网站和账号生成用户手册
+
+先按第 6 节配置 URL、测试账号和密码环境变量，再执行：
+
+```text
+/doc-gen --source website --type manual
+```
+
+需要额外探索主要弹窗、客户端校验和动态元素时：
+
+```text
+/doc-gen --source website --type manual --deep
+```
+
+网站探索严格只读：不会保存、删除、确认业务操作、上传、提交表单、导出或访问外部链接。遇到 CAPTCHA/MFA 或登录失败时会记录未覆盖角色，不会尝试绕过。
 
 ### 生成完整用户手册
 
@@ -401,6 +427,7 @@ test_accounts:
 
 | 参数 | 可选值 | 默认值 | 说明 |
 |---|---|---|---|
+| `--source` | `code/website` | `code` | 输入来源；website 只支持 manual |
 | `--type` | `manual/database/api/all` | `manual` | 选择文档类型 |
 | `--stage` | `all/explorer/runtime/diagram/writer/review/screenshot/render` | `all` | 只运行指定阶段 |
 | `--deep` | 无值开关 | 关闭 | 启用运行时探索 |
@@ -413,8 +440,8 @@ test_accounts:
 
 | 阶段 | 主要前置产物 |
 |---|---|
-| `explorer` | 项目源码 |
-| `runtime` | PKB、截图配置、已启动的目标系统、`--deep` |
+| `explorer` | code 需要项目源码；website 需要截图配置和可访问网站 |
+| `runtime` | 已有 PKB、截图配置、已启动的目标系统；code 模式还需 `--deep` |
 | `diagram` | 对应类型的 PKB |
 | `writer` | PKB、图表 manifest |
 | `review` | `output/manual.md` |
@@ -472,6 +499,14 @@ python templates/generate_screenshots.py `
 还可使用 `--role admin` 只采集指定角色，使用 `--annotate/--no-annotate` 和 `--add-chrome/--no-add-chrome` 临时覆盖配置。
 
 ## 10. 常见问题
+
+### 只有网站和账号，没有源码
+
+使用 `/doc-gen --source website --type manual`。该模式只保证生成测试账号已观察范围内的用户手册；`database/api/all` 会直接拒绝，避免生成推断内容。
+
+### 网站模式生成的功能不完整
+
+检查 `knowledge/runtime/_meta.yaml` 的 `status`、`uncovered_roles`、`skipped_pages` 和 `failures`。补充缺失角色账号或解决登录问题后重新运行；网站 bootstrap 每次都会重新探索，不使用本地哈希跳过。
 
 ### `/doc-gen` 被 PowerShell 识别为无效命令
 
@@ -535,6 +570,7 @@ pandoc -o templates/reference.docx --print-default-data-file reference.docx
 
 - 首次使用先 `--dry-run`，再分阶段生成并抽查 PKB。
 - 日常源码小改直接重跑原命令，利用缓存增量更新。
+- 无源码时显式使用 `--source website`；不要依赖目录是否为空自动判断来源。
 - PKB 结构或缓存算法升级后使用一次 `--no-cache`。
 - 只修改文档样式时运行 `--stage render`，无需重新扫描和截图。
 - 只修改手册内容时依次运行 `review → screenshot → render`。

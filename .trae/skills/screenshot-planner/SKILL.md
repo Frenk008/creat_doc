@@ -24,7 +24,7 @@ cache_key:
   - output/visual-coverage-report.json
   - knowledge/pages/**/*.yaml
   - knowledge/workflows/**/*.yaml
-  - knowledge/runtime/**/*.yaml
+  - knowledge/runtime/**/*.yaml (排除 _meta.yaml.explored_at，仅取稳定发现与覆盖字段)
 stage: screenshot
 ```
 

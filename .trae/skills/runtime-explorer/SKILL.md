@@ -1,52 +1,57 @@
 ---
 name: "runtime-explorer"
-description: "运行时探索器(V2)。通过chrome-devtools-mcp连接已启动的项目,自动探索页面的动态行为(弹窗内容、表单校验、动态加载等)并更新PKB。当doc-gen以--deep模式调用时使用。"
+description: "运行时探索器。通过chrome-devtools-mcp连接已部署网站：bootstrap模式可在没有源码和PKB时从网站、测试账号冷启动生成用户手册所需PKB；enrich模式补充已有PKB中的弹窗、表单校验、动态加载和稳定选择器。当doc-gen使用--source website或--deep时调用。"
 ---
 
-# Runtime Explorer —— 运行时探索器(V2)
+# Runtime Explorer —— 运行时探索器
 
 ## Skill 契约
 
 ```yaml
-inputs:
-  - knowledge/screenshot-config.yaml
-  - knowledge/pages/
-  - knowledge/modules/
-outputs:
-  - knowledge/runtime/
-depends_on:
-  - project-explorer
-cache_key:
-  - knowledge/pages/**/*.yaml
-  - knowledge/modules/**/*.yaml
+modes:
+  bootstrap:
+    inputs: [knowledge/screenshot-config.yaml]
+    outputs: [knowledge/project.yaml, knowledge/modules/, knowledge/pages/, knowledge/roles/, knowledge/workflows/, knowledge/workflow-chains.yaml, knowledge/runtime/]
+    depends_on: []
+    cache_key: []  # 线上状态无法由本地文件哈希判断，每次显式调用都执行
+  enrich:
+    inputs: [knowledge/screenshot-config.yaml, knowledge/pages/, knowledge/modules/, knowledge/workflows/]
+    outputs: [knowledge/runtime/, knowledge/pages/, knowledge/workflows/]
+    depends_on: [project-explorer 或 runtime-explorer:bootstrap]
+    cache_key: [knowledge/pages/**/*.yaml, knowledge/modules/**/*.yaml, knowledge/workflows/**/*.yaml]
 stage: runtime
 ```
 
-你的任务是通过 chrome-devtools-mcp 连接到已运行的目标项目,自动探索页面的动态行为,补充静态分析无法发现的信息,并更新 PKB。
+通过 chrome-devtools-mcp 连接已运行的目标项目，并按调用参数选择模式：
+
+- `bootstrap`：在没有源码和 PKB 时，从已部署网站生成用户手册所需的最小完整 PKB。
+- `enrich`：读取已有 PKB，补充静态分析无法发现的动态行为。
+
+执行 `bootstrap` 前必须完整读取 [references/bootstrap-mode.md](references/bootstrap-mode.md)，并严格遵守其中的遍历上限、合并规则和只读边界。
 
 ## 前置条件
 
-1. 目标项目已由用户自行启动(用户已确认浏览器可以访问 base_url)
+1. 目标项目已部署或由用户自行启动(用户已确认浏览器可以访问 base_url)
 2. 项目可通过浏览器访问(有 base_url)
 3. chrome-devtools-mcp 已集成(本环境已内置)
 
 ## 输入
 
-- `knowledge/screenshot-config.yaml` —— 含 base_url 和 test_accounts
-- `knowledge/pages/` —— 静态分析得到的页面文件目录
-- `knowledge/modules/` —— 模块文件目录
+- 所有模式：`knowledge/screenshot-config.yaml`，包含 base_url/apps 和 test_accounts
+- `bootstrap`：不要求任何现有 PKB
+- `enrich`：要求 `knowledge/pages/`、`knowledge/modules/` 和 `knowledge/workflows/`
 
 ## 输出
 
-- `knowledge/runtime/` —— 运行时发现(`_meta.yaml`、`dialogs.yaml`、`validation.yaml`)
-- 更新对应的 `knowledge/pages/{page_id}.yaml` —— 补充动态发现的 actions 和 fields
-- 更新对应的 `knowledge/workflows/{workflow_id}.yaml` —— 补充动态发现的操作步骤
+- `bootstrap`：创建 `project.yaml`、分文件 modules/pages/roles/workflows、`workflow-chains.yaml` 和 `runtime/`
+- `enrich`：更新对应页面与工作流，并写入 `runtime/` 发现记录
+- 所有 YAML 使用 UTF-8 无 BOM；实体 ID 只允许 `[a-z0-9-]`
 
 ## 为什么用 chrome-devtools-mcp 而不是 Playwright
 
 runtime-explorer 的核心是**探索**,不是按计划执行:
 - 打开页面后,需要 **AI 实时判断**"这个弹窗 PKB 里有没有记录过"
-- 看到一个表单,需要 **AI 决定**"要不要试着提交空表单看校验提示"
+- 看到一个表单,需要 **AI 判断**"哪些字段和只读校验信息值得记录"
 - 发现新的 UI 元素,需要 **AI 决定**"要不要点击看看会弹出什么"
 
 这种"走走停停、实时判断"的工作模式,天然适合 MCP 工具逐步调用,而不适合预先编写脚本。
@@ -73,7 +78,15 @@ runtime-explorer 的核心是**探索**,不是按计划执行:
 | 表单级 | 弹窗中的所有输入框 | 记录字段和校验规则 |
 | 交互级 | 不深入(不执行实际增删改) | 只看不动数据 |
 
-## 执行流程
+## 模式选择
+
+1. 调用方显式传入 `mode=bootstrap|enrich` 时，以显式值为准。
+2. `doc-gen --source website --stage explorer` 必须调用 bootstrap。
+3. `doc-gen --source website --stage runtime` 必须调用 enrich；PKB 不存在时终止并提示先执行 explorer。
+4. `doc-gen --source code --deep` 必须调用 enrich。
+5. 不得仅因 PKB 缺失就静默切换模式。
+
+## Enrich 执行流程
 
 ### Step 1: 读取 PKB 和配置
 
@@ -177,11 +190,13 @@ discovered_dialogs:
 
 #### 3.4 探索表单校验
 
-对弹窗中的表单,提交空表单看校验提示:
+只通过 DOM 属性、可访问性信息和聚焦后失焦观察校验，不点击任何保存、确定或提交控件：
 
 ```
-click(selector="button:has-text('确定')")  # 不填任何内容直接提交
-take_snapshot()  → 获取校验错误信息
+take_snapshot()  → 读取 required / pattern / min / max / aria-describedby
+focus(selector="input[name='username']")
+press_key(key="Tab")  → 仅触发客户端失焦校验
+take_snapshot()  → 获取可见校验信息
 ```
 
 **记录校验规则:**
@@ -224,8 +239,13 @@ click(selector="button:has-text('取消')")  # 或 press_key(key="Escape")
 ```yaml
 runtime:
   status: "complete"            # not_explored / partial / complete / timeout / auth_failed / failed
+  mode: "enrich"                # bootstrap / enrich
   explored_at: "{时间}"
+  account_roles: ["admin"]
+  uncovered_roles: []
   explored_pages: ["login", "user-list", "user-create", "role-list"]
+  skipped_pages: []
+  failures: []
   total_pages: 15               # pages/ 中的页面总数
   explored_count: 4             # 实际探索的页面数
 
@@ -328,7 +348,9 @@ runtime:
 
 ## 严格约束
 
-1. **不修改数据**:不执行实际的增删改操作,只点击"新增/编辑"看弹窗,然后取消关闭。
-2. **不提交表单**:提交空表单仅为触发校验提示,不填写真实数据后提交。
-3. **每次探索后恢复**:弹窗探索完毕后必须关闭弹窗,不残留弹窗状态。
-4. **发现即记录**:任何静态分析没有的信息都要记录到 runtime/ 对应文件。
+1. **严格只读**：不得执行保存、删除、确认业务操作、上传、导出或任何表单提交。
+2. **只开不落库**：可以打开新增/编辑弹窗查看结构，但只能通过取消、关闭或 Escape 恢复页面。
+3. **不绕过认证**：遇到 CAPTCHA、MFA 或登录失败时，记录 `auth_failed`/`partial`，不得尝试绕过。
+4. **只记录事实**：不得推断技术栈、数据库、完整 API 或当前账号不可见的功能。
+5. **每次探索后恢复**：弹窗探索完毕后必须关闭，不残留界面状态。
+6. **确定性输出**：实体按 `id` 排序；内容未变化时不得改写 PKB。时间戳只写入 `runtime/_meta.yaml`。

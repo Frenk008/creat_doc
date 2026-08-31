@@ -1,6 +1,6 @@
 ---
 name: "manual-writer"
-description: "用户手册生成器。读取 PKB YAML 知识库,按照标准大纲模板生成面向普通用户的 Markdown 用户手册。当 project-explorer 完成源码分析后,或 doc-gen 编排器调用时使用。"
+description: "用户手册生成器。读取由源码分析或已部署网站只读探索产生的PKB，按照标准大纲模板生成面向普通用户的Markdown用户手册。当project-explorer、runtime-explorer bootstrap或doc-gen编排器完成知识采集后使用。"
 ---
 
 # Manual Writer —— 用户手册生成器
@@ -14,7 +14,8 @@ inputs:
 outputs:
   - output/manual.md
 depends_on:
-  - project-explorer
+  - project-explorer (source=code)
+  - runtime-explorer:bootstrap (source=website)
   - diagram-generator (需要嵌入图表)
 cache_key:
   - knowledge/modules/**/*.yaml
@@ -41,6 +42,8 @@ stage: writer
 > 如目录不存在则回退到单文件(如 `knowledge/pages.yaml`)。两种格式二选一即可。
 
 > **PKB 版本检查:** 读取 `knowledge/project.yaml` 时,如 `schema_version` 不在支持范围(`["1.0"]`),输出警告并提示用户升级 Skill。
+
+> **来源检查:** `project.source_type` 缺省按 `code` 处理。值为 `website` 时，PKB 代表测试账号可访问界面的已观察范围，不代表系统全部功能。
 
 ## 输出
 
@@ -94,6 +97,16 @@ stage: writer
 （1）{从 steps 的 notes 提取,或根据 actions 推导合理注意事项}
 （2）{...}
 ```
+
+### 3.1 网站来源规则
+
+当 `project.source_type: website` 时：
+
+1. 在“软件简介”或“注意事项”明确说明：本文档仅覆盖所提供测试账号能够访问且已实际探索的界面。
+2. 只把已有 workflow 中实际执行的只读步骤写入操作流程。
+3. 页面仅出现新增、编辑、删除、保存等控件时，可以说明控件存在，但不得生成未执行的提交步骤、成功反馈或 postcondition。
+4. 不得根据 UI 名称推断数据库、完整 API、后端架构、隐藏角色或不可访问功能。
+5. `runtime/_meta.yaml` 为 partial 时，在文档中列出未覆盖角色或页面范围，不得把当前 PKB 描述为系统全量功能。
 
 ### 4. 语言转换规则
 

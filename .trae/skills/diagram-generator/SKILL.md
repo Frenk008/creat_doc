@@ -17,7 +17,8 @@ outputs:
   - output/diagrams/*.png
   - output/diagrams/manifest.yaml
 depends_on:
-  - project-explorer
+  - project-explorer (source=code)
+  - runtime-explorer:bootstrap (source=website)
 cache_key:
   - knowledge/database/**/*.yaml
   - knowledge/apis/**/*.yaml
@@ -41,6 +42,8 @@ stage: diagram
 | manual | 业务流程图 | workflows.yaml 的 workflow_chains |
 | manual | 系统功能总览图 | modules.yaml + pages.yaml |
 | all | 以上全部 | 全部 PKB |
+
+当 `project.source_type: website` 时只允许 manual 图表：从已观察的 modules/pages 生成系统功能总览图，从只读 workflows/workflow-chains 生成流程图；不得生成 ER 图、API 时序图或推断性架构图。
 
 ### 模式 B: 自然语言(独立使用)
 

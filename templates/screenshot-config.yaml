@@ -1,6 +1,8 @@
-# 截图配置模板
+# 截图与运行时探索配置模板
 # 用户需先自行启动项目(如 docker compose up / npm run dev / java -jar 等),
 # 然后填写此文件,放到 knowledge/screenshot-config.yaml
+# --source website 时，runtime-explorer bootstrap 也使用这里的网站地址和测试账号，
+# 不要求项目源码，但第一版只支持生成用户手册。
 # 安全提示:password 字段推荐使用 ${ENV_VAR} 引用环境变量,不要将明文密码提交到 git
 
 screenshot:
@@ -53,6 +55,12 @@ screenshot:
   # 操作后等待时间(毫秒,等动画完成)
   action_delay: 500           # 当前不支持:脚本通过每张截图的 wait_after_action 控制
 
+# 网站冷启动探索约束。read_only 和 same_origin_only 是强制安全策略，不提供关闭开关。
+exploration:
+  max_pages_per_role: 50
+  read_only: true
+  same_origin_only: true
+
 # 单前端项目:用 base_url
 base_url: "http://localhost:8080"
 
@@ -71,6 +79,7 @@ apps:
 # 如果不同前端有不同账号体系,在对应角色下标注 app
 test_accounts:
   admin:
+    display_name: "管理员"      # 可选；缺省时使用页面可见角色名或账号键
     username: "admin"
     password: "${APP_ADMIN_PASS}"
     login_url: "/login"
@@ -78,6 +87,7 @@ test_accounts:
     app: "admin"              # 该账号登录哪套前端(单前端项目可省略)
   
   user:
+    display_name: "普通用户"
     username: "testuser"
     password: "${APP_USER_PASS}"
     login_url: "/login"

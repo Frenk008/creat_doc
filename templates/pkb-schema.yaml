@@ -65,6 +65,7 @@ schema_version: "1.0"
 # ---- project.yaml: 项目基本信息 ----
 project:
   name: ""                    # 项目名称
+  source_type: "code"         # code / website；可选字段，缺省按 code 处理
   version: ""                 # 版本号(如可识别)
   description: ""             # 项目简介
   tech_stack:
@@ -280,8 +281,13 @@ screenshots:
 # 字段名与 runtime-explorer 实际产出的 runtime.yaml 结构一致。
 runtime:
   status: "not_explored"        # not_explored / partial / complete / timeout / auth_failed / failed
+  mode: "enrich"                # bootstrap / enrich
   explored_at: ""               # 探索时间
+  account_roles: []              # 实际尝试探索的测试账号角色
+  uncovered_roles: []            # CAPTCHA/MFA/认证失败等未覆盖角色
   explored_pages: []            # 实际探索的页面ID
+  skipped_pages: []             # 页面上限、超时或安全边界导致的跳过项
+  failures: []                  # 不含密码/Cookie/Token的失败摘要
   total_pages: 0                # pages.yaml 中的页面总数
   explored_count: 0             # 实际探索的页面数
   discovered_dialogs:           # 运行时发现的对话框/弹窗

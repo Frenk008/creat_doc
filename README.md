@@ -2,6 +2,8 @@
 
 完整使用流程、参数、截图配置和排错说明见 [Doc Gen Skill 完整使用指南](DOC-GEN-SKILL-使用指南.md)。
 
+支持 `--source code` 从源码生成多类文档，也支持 `--source website` 仅凭已部署网站和测试账号只读生成用户手册。
+
 ## Python 环境
 
 ```powershell

@@ -18,3 +18,7 @@ __pycache__/
 
 # Office 临时文件
 ~$*.docx
+
+# 本地文档与个人材料
+*.docx
+*.pdf

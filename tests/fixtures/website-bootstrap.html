@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>文档平台测试站点</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    nav a { margin-right: 1rem; }
+    .hidden { display: none; }
+    .dialog { border: 1px solid #999; padding: 1rem; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <section id="login">
+    <h1>登录</h1>
+    <label>用户名 <input name="username" required></label>
+    <label>密码 <input name="password" type="password" required></label>
+    <button id="login-button">登录</button>
+    <p id="login-error" role="alert"></p>
+  </section>
+
+  <main id="app" class="hidden">
+    <h1>文档平台</h1>
+    <p id="role-label"></p>
+    <nav aria-label="主导航">
+      <a href="#/dashboard">工作台</a>
+      <a href="#/users" data-role="admin-only">用户管理</a>
+      <a href="#/profile">个人中心</a>
+      <a href="#/profile">个人中心重复入口</a>
+      <a href="https://example.com">外部帮助</a>
+    </nav>
+    <section id="page"></section>
+    <p>业务写入次数：<span id="mutation-count">0</span></p>
+  </main>
+
+  <template id="users-page">
+    <h2>用户管理</h2>
+    <label>关键词 <input name="keyword"></label>
+    <button id="search-button">搜索</button>
+    <button id="create-button">新增</button>
+    <button data-mutation-trap="true">保存</button>
+    <button data-mutation-trap="true">删除</button>
+    <button data-mutation-trap="true">导出</button>
+    <div id="create-dialog" class="dialog hidden" role="dialog">
+      <h3>新增用户</h3>
+      <label>用户名 <input name="new-username" required minlength="3"></label>
+      <button id="cancel-button">取消</button>
+      <button data-mutation-trap="true">确定</button>
+    </div>
+  </template>
+
+  <script>
+    const accounts = { admin: { password: "admin-pass", role: "admin" }, user: { password: "user-pass", role: "user" } };
+    let currentRole = "";
+    let mutationCount = 0;
+    const login = document.querySelector("#login");
+    const app = document.querySelector("#app");
+    const page = document.querySelector("#page");
+
+    document.querySelector("#login-button").addEventListener("click", () => {
+      const username = document.querySelector('[name="username"]').value;
+      const password = document.querySelector('[name="password"]').value;
+      if (!accounts[username] || accounts[username].password !== password) {
+        document.querySelector("#login-error").textContent = "账号或密码错误";
+        return;
+      }
+      currentRole = accounts[username].role;
+      login.classList.add("hidden");
+      app.classList.remove("hidden");
+      document.querySelector("#role-label").textContent = `当前角色：${currentRole}`;
+      document.querySelectorAll('[data-role="admin-only"]').forEach(el => el.classList.toggle("hidden", currentRole !== "admin"));
+      location.hash = "/dashboard";
+      render();
+    });
+
+    function render() {
+      const route = location.hash || "#/dashboard";
+      if (route === "#/users" && currentRole === "admin") {
+        page.replaceChildren(document.querySelector("#users-page").content.cloneNode(true));
+        document.querySelector("#create-button").addEventListener("click", () => document.querySelector("#create-dialog").classList.remove("hidden"));
+        document.querySelector("#cancel-button").addEventListener("click", () => document.querySelector("#create-dialog").classList.add("hidden"));
+        document.querySelectorAll('[data-mutation-trap="true"]').forEach(button => button.addEventListener("click", () => {
+          mutationCount += 1;
+          document.querySelector("#mutation-count").textContent = String(mutationCount);
+        }));
+      } else if (route === "#/profile") {
+        page.innerHTML = "<h2>个人中心</h2><p>查看个人资料。</p>";
+      } else {
+        page.innerHTML = "<h2>工作台</h2><p>查看系统概览。</p>";
+      }
+    }
+    window.addEventListener("hashchange", render);
+  </script>
+</body>
+</html>
